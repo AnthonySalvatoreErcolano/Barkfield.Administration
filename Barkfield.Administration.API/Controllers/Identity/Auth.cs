@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace Barkfield.Administration.API.Controllers.Identity
 {
     [Route("api/[controller]")]
-    [ApiController]
+    [ApiController] 
     public class Auth(IIdentityService identityService) : ControllerBase
     {
         private readonly IIdentityService _identityService = identityService;
