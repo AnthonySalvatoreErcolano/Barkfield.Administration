@@ -1,0 +1,6 @@
+@Barkfield.Administration.API_HostAddress = http://localhost:5147
+
+GET {{Barkfield.Administration.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

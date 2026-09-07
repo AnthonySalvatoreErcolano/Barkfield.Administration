@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Barkfield.Administration.API/Barkfield.Administration.API.csproj" />
+  <Project Path="Barkfield.Administration.Application/Barkfield.Administration.Application.csproj" />
+  <Project Path="Barkfield.Administration.Domain/Barkfield.Administration.Domain.csproj" />
+  <Project Path="Barkfield.Administration.Infrastructure/Barkfield.Administration.Infrastructure.csproj" />
+</Solution>
