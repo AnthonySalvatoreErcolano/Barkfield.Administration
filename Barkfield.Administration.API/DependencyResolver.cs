@@ -13,7 +13,7 @@ namespace Barkfield.Administration.API
             builder.Services.AddControllers();
             builder.Services.AddOpenApi();
             builder.Services.AddSignalR();
-
+            builder.Services.AddMemoryCache();
             var jwtSection = builder.Configuration.GetSection("JwtSettings");
             var jwtSettings = jwtSection.Get<JwtSettings>()
                 ?? throw new InvalidOperationException("JwtSettings configuration section is missing.");

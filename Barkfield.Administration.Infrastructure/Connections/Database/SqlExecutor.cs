@@ -41,6 +41,7 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
         public async Task<T?> QuerySingleAsync<T>(string sql, object? parameters = null)
         {
             return await WrapPerformanceAndErrorsAsync(() => _cnn.QuerySingleOrDefaultAsync<T>(sql, parameters), sql);
+            
         }
 
         /// <summary>
