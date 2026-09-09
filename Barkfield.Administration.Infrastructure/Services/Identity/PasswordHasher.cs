@@ -1,10 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Barkfield.Administration.Application.Services.Identity;
 using BCrypt.Net;
 namespace Barkfield.Administration.Infrastructure.Services.Identity
 {
-    internal class PasswordHasher
+    internal class PasswordHasher:IPasswordHasher
     {
         public string HashPassword(string password)
         {

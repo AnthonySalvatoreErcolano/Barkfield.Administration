@@ -4,6 +4,6 @@ using System.Text;
 
 namespace Barkfield.Administration.Application.Services.Identity.Models
 {
-    public record AuthenticationResult(string AccessToken, string RefreshToken, DateTime RefreshTokenExpiresAt, string email, Guid userId);
+    public record AuthenticationResult(string AccessToken, string RefreshToken, DateTime RefreshTokenExpiresAt, string Email, Guid UserId);
  
 }

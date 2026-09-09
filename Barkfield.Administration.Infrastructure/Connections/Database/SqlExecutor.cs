@@ -8,6 +8,8 @@ using System.Data;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Barkfield.Administration.Infrastructure.Connections.Database
 {
@@ -17,6 +19,7 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
         Task<T> ReadSingleAsync<T>();
         Task<T?> ReadSingleOrDefaultAsync<T>();
     }
+
     public class SqlExecutor : ISqlExecutor
     {
         private readonly IDbConnection _cnn;
@@ -28,36 +31,45 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
             _logger = logger;
         }
 
-        public async Task<int> ExecuteAsync(string sql, object? parameters = null)
+        public async Task<int> ExecuteAsync(string sql, object? parameters = null, CancellationToken cancellationToken = default)
         {
-            return await WrapPerformanceAndErrorsAsync(() => _cnn.ExecuteAsync(sql, parameters), sql);
+            return await WrapPerformanceAndErrorsAsync(
+                () => _cnn.ExecuteAsync(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken)),
+                sql);
         }
 
-        public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? parameters = null)
+        public async Task<IEnumerable<T>> QueryAsync<T>(string sql, object? parameters = null, CancellationToken cancellationToken = default)
         {
-            return await WrapPerformanceAndErrorsAsync(() => _cnn.QueryAsync<T>(sql, parameters), sql);
+            return await WrapPerformanceAndErrorsAsync(
+                () => _cnn.QueryAsync<T>(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken)),
+                sql);
         }
 
-        public async Task<T?> QuerySingleAsync<T>(string sql, object? parameters = null)
+        public async Task<T?> QuerySingleAsync<T>(string sql, object? parameters = null, CancellationToken cancellationToken = default)
         {
-            return await WrapPerformanceAndErrorsAsync(() => _cnn.QuerySingleOrDefaultAsync<T>(sql, parameters), sql);
-            
+            return await WrapPerformanceAndErrorsAsync(
+                () => _cnn.QuerySingleOrDefaultAsync<T>(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken)),
+                sql);
         }
 
         /// <summary>
         /// Executes a query that JOINs two tables and maps them using a custom Func wrapper.
         /// </summary>
         public async Task<IEnumerable<TReturn>> QueryJoinAsync<TFirst, TSecond, TReturn>(
-            string sql,
-            Func<TFirst, TSecond, TReturn> map,
-            object? parameters = null,
-            string splitOn = "Id")
+                 string sql,
+                 Func<TFirst, TSecond, TReturn> map,
+                 object? parameters = null,
+                 string splitOn = "Id",
+                 CancellationToken cancellationToken = default)
         {
-            return await WrapPerformanceAndErrorsAsync(() =>
-                _cnn.QueryAsync(sql, map, parameters, splitOn: splitOn), sql);
+            var command = new CommandDefinition(sql, parameters, cancellationToken: cancellationToken);
+
+            return await WrapPerformanceAndErrorsAsync(
+                () => _cnn.QueryAsync(command, map, splitOn: splitOn),
+                sql);
         }
 
-        public async Task<int> ExecuteWithAudit(string sql, object? parameters = null, string auditAction = "GeneralUpdate")
+        public async Task<int> ExecuteWithAudit(string sql, object? parameters = null, string auditAction = "GeneralUpdate", CancellationToken cancellationToken = default)
         {
             return await WrapPerformanceAndErrorsAsync(async () =>
             {
@@ -65,10 +77,10 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
                 using var transaction = _cnn.BeginTransaction();
                 try
                 {
-                    var result = await _cnn.ExecuteAsync(sql, parameters, transaction);
+                    var result = await _cnn.ExecuteAsync(new CommandDefinition(sql, parameters, transaction: transaction, cancellationToken: cancellationToken));
 
                     // Crucial: Passed transaction into audit so it rolls back if either block crashes
-                    await CreateAuditAsync(sql, parameters, auditAction, transaction);
+                    await CreateAuditAsync(sql, parameters, auditAction, transaction, cancellationToken);
 
                     transaction.Commit();
                     return result;
@@ -81,9 +93,9 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
             }, sql);
         }
 
-        public async Task<IMultipleResultsReader> QueryMultipleAsync(string sql, object? parameters = null)
+        public async Task<IMultipleResultsReader> QueryMultipleAsync(string sql, object? parameters = null, CancellationToken cancellationToken = default)
         {
-            var gridReader = await _cnn.QueryMultipleAsync(sql, parameters);
+            var gridReader = await _cnn.QueryMultipleAsync(new CommandDefinition(sql, parameters, cancellationToken: cancellationToken));
             return new DapperMultipleResultsReader(gridReader, _cnn);
         }
 
@@ -107,7 +119,7 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
             }
         }
 
-        private async Task CreateAuditAsync(string? sql, object? parameters, string auditAction, IDbTransaction transaction)
+        private async Task CreateAuditAsync(string? sql, object? parameters, string auditAction, IDbTransaction transaction, CancellationToken cancellationToken)
         {
             string jsonParams = parameters != null ? JsonSerializer.Serialize(parameters) : "{}";
 
@@ -115,13 +127,17 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
             INSERT INTO AuditLogs (Action, Query, JsonParameters, Timestamp) 
             VALUES (@Action, @Sql, @JsonParams, @Now)";
 
-            await _cnn.ExecuteAsync(auditSql, new
-            {
-                Action = auditAction,
-                Sql = sql,
-                JsonParams = jsonParams,
-                Now = DateTime.UtcNow
-            }, transaction);
+            await _cnn.ExecuteAsync(new CommandDefinition(
+                auditSql,
+                new
+                {
+                    Action = auditAction,
+                    Sql = sql,
+                    JsonParams = jsonParams,
+                    Now = DateTime.UtcNow
+                },
+                transaction: transaction,
+                cancellationToken: cancellationToken));
         }
 
         public class DapperMultipleResultsReader(SqlMapper.GridReader reader, IDbConnection connection) : IMultipleResultsReader

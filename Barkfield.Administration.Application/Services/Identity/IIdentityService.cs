@@ -9,6 +9,7 @@ namespace Barkfield.Administration.Application.Services.Identity
     {
         Task<AuthenticationResult?> LoginAsync(string email, string password);
         Task LogoutAsync(string? userId, string? refreshToken, CancellationToken cancellationToken);
+        Task<AuthenticationResult?> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken);
         Task<Guid?> RegisterAsync(string email, string password, string name);
     }
 }

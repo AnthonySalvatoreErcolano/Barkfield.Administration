@@ -2,6 +2,7 @@
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Identity.Models;
 using Barkfield.Administration.Infrastructure.Connections.Database;
+using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.Settings;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -14,10 +15,9 @@ using System.Text;
 
 namespace Barkfield.Administration.Infrastructure.Services.Identity
 {
-    internal class IdentityService(PasswordHasher passwordHasher, IOptions<JwtSettings> options, ISqlExecutor sqlExecutor) : IIdentityService
+    internal class IdentityService(IPasswordHasher passwordHasher, TokenGenerator tokenGenerator, ISqlExecutor sqlExecutor) : IIdentityService
     {
-        private readonly JwtSettings _jwtOptions = options.Value;
-
+        
         public async Task<AuthenticationResult?> LoginAsync(string email,string password)
         {
 
@@ -32,11 +32,11 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
 
             if (!verificationResult) return null;
 
-            var accessToken = GenerateJwtToken(user.Id, email);
-            var rawRefreshToken = GenerateRefreshTokenString();
-            var refreshTokenHash = HashToken(rawRefreshToken);
+            var accessToken = tokenGenerator.GenerateJwtToken(user.Id, email);
+            var rawRefreshToken = tokenGenerator.GenerateRefreshTokenString();
+            var refreshTokenHash = tokenGenerator.HashToken(rawRefreshToken);
 
-            var refreshTokenExpiresAt = DateTime.UtcNow.AddDays(_jwtOptions.RefreshTokenExpiryDays > 0 ? _jwtOptions.RefreshTokenExpiryDays : 7);
+            var refreshTokenExpiresAt = DateTime.UtcNow.AddDays(tokenGenerator._jwtOptions.RefreshTokenExpiryDays > 0 ? tokenGenerator._jwtOptions.RefreshTokenExpiryDays : 7);
             
             const string insertRefreshTokenSql = @"
                 INSERT INTO RefreshTokens (UserId, TokenHash, ExpiresAt, CreatedAt)
@@ -55,7 +55,6 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
                 email,
                 user.Id);
         }
-
         public async Task<Guid?> RegisterAsync(string email, string password, string name)
         {
             string hashedPassword = passwordHasher.HashPassword(password);
@@ -63,14 +62,12 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
 
             return Guid.NewGuid();
         }
-
-
         //Return here
-        public async Task LogoutAsync(Guid userId, string? refreshToken, CancellationToken cancellationToken)
+        public async Task LogoutAsync(string? userId, string? refreshToken, CancellationToken cancellationToken)
         {
             if (!string.IsNullOrWhiteSpace(refreshToken))
             {
-                var tokenHash = HashToken(refreshToken);
+                var tokenHash = tokenGenerator.HashToken(refreshToken);
 
                 const string revokeTokenSql = @"
             UPDATE RefreshTokens
@@ -98,42 +95,80 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
 
             await sqlExecutor.ExecuteAsync(revokeAllTokensSql, new { UserId = userId });
         }
-
-
-        private string GenerateJwtToken(Guid userId, string email)
+        public async Task<AuthenticationResult?> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
         {
-            var tokenHandler = new JwtSecurityTokenHandler();
-            var key = Encoding.UTF8.GetBytes(_jwtOptions.Secret);
+            var tokenHash = tokenGenerator.HashToken(refreshToken);
 
-            var tokenDescriptor = new SecurityTokenDescriptor
+            // 1. Fetch active token & user details via Dapper
+            const string getRefreshTokenSql = @"
+        SELECT 
+            rt.Id AS TokenId,
+            rt.UserId,
+            rt.ExpiresAt,
+            rt.RevokedAt,
+            u.Email,
+            u.IsActive
+        FROM RefreshTokens rt
+        INNER JOIN Users u ON rt.UserId = u.Id
+        WHERE rt.TokenHash = @TokenHash;";
+
+            var tokenRecord = await sqlExecutor.QuerySingleAsync<RefreshTokenDto>(
+                getRefreshTokenSql,
+                new { TokenHash = tokenHash }
+            );
+
+            // 2. Security Checks
+            if (tokenRecord is null) return null; // Token does not exist
+
+            // Reuse Detection: If token was already revoked, someone may have stolen it.
+            // Revoke ALL user tokens immediately as a safety precaution.
+            if (tokenRecord.RevokedAt is not null)
             {
-                Subject = new ClaimsIdentity([
-                    new Claim(ClaimTypes.NameIdentifier, userId.ToString()),
-                new Claim(ClaimTypes.Email, email)
-                ]),
-                Expires = DateTime.UtcNow.AddMinutes(_jwtOptions.ExpiryMinutes), 
-                SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),
-                Issuer = _jwtOptions.Issuer,
-                Audience = _jwtOptions.Audience,
-            };
+                await LogoutAsync(tokenRecord.UserId, null, cancellationToken);
+                return null;
+            }
 
-            var token = tokenHandler.CreateToken(tokenDescriptor);
-            return tokenHandler.WriteToken(token);
-        }
+            // Expiration or Inactive User check
+            if (DateTime.UtcNow >= tokenRecord.ExpiresAt || !tokenRecord.IsActive)
+            {
+                return null;
+            }
 
-        private static string GenerateRefreshTokenString()
-        {
-            var randomNumber = new byte[64];
-            using var rng = RandomNumberGenerator.Create();
-            rng.GetBytes(randomNumber);
-            return Convert.ToBase64String(randomNumber);
-        }
+            // 3. Generate new Access Token and new Refresh Token (Token Rotation)
+            var newAccessToken = tokenGenerator.GenerateJwtToken(tokenRecord.UserId, tokenRecord.Email);
+            var newRawRefreshToken = tokenGenerator.GenerateRefreshTokenString();
+            var newRefreshTokenHash = tokenGenerator.HashToken(newRawRefreshToken);
 
-        private static string HashToken(string token)
-        {
-            using var sha256 = SHA256.Create();
-            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
-            return Convert.ToBase64String(bytes);
+            var newRefreshTokenExpiresAt = DateTime.UtcNow.AddDays(
+                tokenGenerator._jwtOptions.RefreshTokenExpiryDays > 0 ? tokenGenerator._jwtOptions.RefreshTokenExpiryDays : 7
+            );
+
+            // 4. Database Transaction: Revoke old token & Insert new rotated token
+            const string rotateTokensSql = @"
+        UPDATE RefreshTokens 
+        SET RevokedAt = GETUTCDATE(), 
+            ReplacedByTokenHash = @NewTokenHash,
+            ReasonRevoked = 'Replaced by new token'
+        WHERE Id = @OldTokenId;
+
+        INSERT INTO RefreshTokens (UserId, TokenHash, ExpiresAt, CreatedAt)
+        VALUES (@UserId, @NewTokenHash, @ExpiresAt, GETUTCDATE());";
+
+            await sqlExecutor.ExecuteAsync(rotateTokensSql, new
+            {
+                OldTokenId = tokenRecord.TokenId,
+                UserId = tokenRecord.UserId,
+                NewTokenHash = newRefreshTokenHash,
+                ExpiresAt = newRefreshTokenExpiresAt
+            });
+
+            return new AuthenticationResult(
+                newAccessToken,
+                newRawRefreshToken,
+                newRefreshTokenExpiresAt,
+                tokenRecord.Email,
+                tokenRecord.UserId
+            );
         }
     }
 }
