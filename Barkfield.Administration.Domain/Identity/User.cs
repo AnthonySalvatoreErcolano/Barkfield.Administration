@@ -46,7 +46,28 @@ namespace Barkfield.Administration.Domain.Identity
             user._roleIds.AddRange(roleList);
             return user;
         }
+        public static User FromDto(Guid id, string name, string email, string passwordHash, bool isActive, DateTime createdAt, IEnumerable<Guid> roleIds)
+        {
+            if (id == Guid.Empty)
+                throw new DomainException("Invalid user ID.");
 
+            var user = new User
+            {
+                Id = id,
+                Name = name,
+                Email = email,
+                PasswordHash = passwordHash,
+                IsActive = isActive,
+                CreatedAt = createdAt
+            };
+
+            if (roleIds != null)
+            {
+                user._roleIds.AddRange(roleIds.Distinct());
+            }
+
+            return user;
+        }
         public void AssignRole(Guid roleId)
         {
             if (roleId == Guid.Empty)
@@ -63,5 +84,29 @@ namespace Barkfield.Administration.Domain.Identity
 
             _roleIds.Remove(roleId);
         }
+
+        public void UpdateProfile(string name, string email)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                throw new DomainException("User name cannot be empty.");
+
+            if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+                throw new DomainException("A valid email address is required.");
+
+            Name = name.Trim();
+            Email = email.ToLowerInvariant().Trim();
+        }
+
+        public void SyncRoles(IEnumerable<Guid> roleIds)
+        {
+            var roleList = roleIds?.Distinct().ToList() ?? [];
+            if (roleList.Count == 0)
+                throw new DomainException("A user must be assigned at least one role.");
+
+            _roleIds.Clear();
+            _roleIds.AddRange(roleList);
+        }
+
+       
     }
 }

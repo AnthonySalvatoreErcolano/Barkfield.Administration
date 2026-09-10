@@ -1,10 +1,10 @@
 ﻿namespace Barkfield.Administration.API.Models.Requests
 {
-    public class CreateUserRequest
+    public class EditUserRequest
     {
-        public string Name { get; set; }
+        public Guid UserId { get; set; }
         public string Email { get; set; }
-        public string Password { get; set; }
+        public string Name { get; set; }
         public IEnumerable<Guid> UserRoles { get; set; }
     }
 }

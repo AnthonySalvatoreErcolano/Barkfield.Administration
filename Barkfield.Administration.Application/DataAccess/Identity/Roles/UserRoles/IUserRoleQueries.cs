@@ -6,6 +6,6 @@ namespace Barkfield.Administration.Application.Repositories.Identity.Roles.UserR
 {
     public interface IUserRoleQueries
     {
-        public Task<IEnumerable<Guid>> GetUserRolesByUserId(Guid userId);
+        public Task<IEnumerable<Guid>> GetUserRolesByUserId(Guid userId, CancellationToken cancellationToken);
     }
 }

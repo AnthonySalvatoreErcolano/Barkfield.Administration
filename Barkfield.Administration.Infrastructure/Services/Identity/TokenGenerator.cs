@@ -10,7 +10,7 @@ using System.Text;
 
 namespace Barkfield.Administration.Infrastructure.Services.Identity
 {
-    internal class TokenGenerator(IOptions<JwtSettings> options)
+    internal class TokenGenerator(IOptions<JwtSettings> options): ITokenGenerator
     {
         public readonly JwtSettings _jwtOptions = options.Value;
         public string GenerateJwtToken(Guid userId, string email)
@@ -36,17 +36,43 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
 
         public  string GenerateRefreshTokenString()
         {
+            return GenerateRawToken();
+        }
+
+        //public  string HashToken(string token)
+        //{
+        //    using var sha256 = SHA256.Create();
+        //    var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
+        //    return Convert.ToBase64String(bytes);
+        //}
+
+        public string GenerateRawToken()
+        {
             var randomNumber = new byte[64];
             using var rng = RandomNumberGenerator.Create();
             rng.GetBytes(randomNumber);
             return Convert.ToBase64String(randomNumber);
         }
 
-        public  string HashToken(string token)
+        public string HashToken(string token)
         {
-            using var sha256 = SHA256.Create();
-            var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
+            if (string.IsNullOrWhiteSpace(token))
+                throw new ArgumentException("Token cannot be null or empty.", nameof(token));
+
+            byte[] bytes = SHA256.HashData(Encoding.UTF8.GetBytes(token));
             return Convert.ToBase64String(bytes);
+        }
+
+        public bool VerifyToken(string rawToken, string storedTokenHash)
+        {
+            if (string.IsNullOrWhiteSpace(rawToken) || string.IsNullOrWhiteSpace(storedTokenHash))
+                return false;
+
+            string computedHash = HashToken(rawToken);
+
+            return CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(computedHash),
+                Encoding.UTF8.GetBytes(storedTokenHash));
         }
     }
 }
