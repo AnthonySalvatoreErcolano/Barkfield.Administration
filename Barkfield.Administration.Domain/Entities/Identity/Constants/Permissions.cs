@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Barkfield.Administration.Domain.Identity.Constants
+namespace Barkfield.Administration.Domain.Entities.Identity.Constants
 {
     public static class Permissions
     {

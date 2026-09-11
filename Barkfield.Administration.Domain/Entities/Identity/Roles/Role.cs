@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Barkfield.Administration.Domain.Identity.Roles
+namespace Barkfield.Administration.Domain.Entities.Identity.Roles
 {
     internal class Role
     {

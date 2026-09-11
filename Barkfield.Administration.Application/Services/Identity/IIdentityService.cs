@@ -11,5 +11,7 @@ namespace Barkfield.Administration.Application.Services.Identity
         Task LogoutAsync(string? userId, string? refreshToken, CancellationToken cancellationToken);
         Task<AuthenticationResult?> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken);
         Task<Guid?> RegisterAsync(string email, string password, string name);
+        Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken);
+        Task CompletePasswordResetAsync(string email, string rawToken, string newPassword, CancellationToken cancellationToken);
     }
 }

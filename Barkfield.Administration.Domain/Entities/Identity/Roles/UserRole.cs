@@ -1,4 +1,4 @@
-﻿namespace Barkfield.Administration.Domain.Identity.Roles;
+﻿namespace Barkfield.Administration.Domain.Entities.Identity.Roles;
 
 public class UserRole
 {

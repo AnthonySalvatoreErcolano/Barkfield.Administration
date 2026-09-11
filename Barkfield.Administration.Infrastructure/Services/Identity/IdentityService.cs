@@ -1,6 +1,11 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Dtos;
+using Barkfield.Administration.Application.DataAccess.Users;
+using Barkfield.Administration.Application.Repositories.Identity.Roles.UserRoles;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Identity.Models;
+using Barkfield.Administration.Domain.Entities;
+using Barkfield.Administration.Domain.Entities.Identity.Tokens;
+using Barkfield.Administration.Domain.Shared.Exceptions;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.Settings;
@@ -15,7 +20,7 @@ using System.Text;
 
 namespace Barkfield.Administration.Infrastructure.Services.Identity
 {
-    internal class IdentityService(IPasswordHasher passwordHasher, TokenGenerator tokenGenerator, ISqlExecutor sqlExecutor) : IIdentityService
+    internal class IdentityService(IPasswordHasher _passwordHasher, TokenGenerator tokenGenerator, IUserQueries _userQueries, IUserCommands _userCommands, ISqlExecutor sqlExecutor) : IIdentityService
     {
         
         public async Task<AuthenticationResult?> LoginAsync(string email,string password)
@@ -28,7 +33,7 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
 
             if (user == null) return null;
 
-            var verificationResult = passwordHasher.VerifyPassword( password,user.PasswordHash);
+            var verificationResult = _passwordHasher.VerifyPassword( password,user.PasswordHash);
 
             if (!verificationResult) return null;
 
@@ -57,7 +62,7 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
         }
         public async Task<Guid?> RegisterAsync(string email, string password, string name)
         {
-            string hashedPassword = passwordHasher.HashPassword(password);
+            string hashedPassword = _passwordHasher.HashPassword(password);
             // Dapper execution here...
 
             return Guid.NewGuid();
@@ -169,6 +174,58 @@ namespace Barkfield.Administration.Infrastructure.Services.Identity
                 tokenRecord.Email,
                 tokenRecord.UserId
             );
+        }
+        public async Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken)
+        {
+            UserDto? dto = await _userQueries.GetUserByEmailAsync(email, cancellationToken);
+
+            // Prevent email enumeration: return silently if user does not exist
+            if (dto is null) return;
+
+            // 1. Generate raw token and computed hash via ITokenHasher
+            string rawToken = tokenGenerator.GenerateRawToken();
+            string tokenHash = tokenGenerator.HashToken(rawToken);
+            DateTime expiresAt = DateTime.UtcNow.AddHours(1);
+            var resetToken = PasswordResetToken.Create( userId: dto.Id, tokenHash: tokenHash, validityDuration:TimeSpan.FromHours(1));
+
+        
+            await _userCommands.CreateResetToken(, cancellationToken);
+
+            // 4. Send raw token to user via email infrastructure
+            await _emailService.SendPasswordResetEmailAsync(dto.Email, rawToken, cancellationToken);
+        }
+
+        public async Task CompletePasswordResetAsync(string email, string rawToken, string newPassword, CancellationToken cancellationToken)
+        {
+            UserDto? dto = await _userQueries.GetByEmailWithResetTokenAsync(email, cancellationToken);
+            if (dto is null || string.IsNullOrWhiteSpace(dto.PasswordResetTokenHash) || !dto.PasswordResetTokenExpiresAt.HasValue)
+            {
+                throw new DomainException("Invalid password reset request.");
+            }
+
+            // 1. Verify expiration window
+            if (DateTime.UtcNow > dto.PasswordResetTokenExpiresAt.Value)
+            {
+                throw new DomainException("The password reset token has expired.");
+            }
+
+            // 2. Verify incoming raw token against stored hash using ITokenHasher
+            bool isTokenValid = _tokenHasher.VerifyToken(rawToken, dto.PasswordResetTokenHash);
+            if (!isTokenValid)
+            {
+                throw new DomainException("Invalid password reset token.");
+            }
+
+            // 3. Hash new password via IPasswordHasher
+            string newPasswordHash = _passwordHasher.HashPassword(newPassword);
+
+            // 4. Rehydrate domain aggregate to enforce core domain validation on profile update
+            IEnumerable<Guid> roles = await _userQueries.GetUserRoles(dto.Id, cancellationToken);
+            User user = User.FromDto(dto.Id, dto.Name, dto.Email, newPasswordHash, dto.IsActive, dto.CreatedAt, roles);
+
+            // 5. Persist updated password and clear reset token fields
+            var command = new UpdateUserPasswordCommand(user.Id, user.PasswordHash);
+            await _userCommands.UpdatePasswordAsync(command, cancellationToken);
         }
     }
 }

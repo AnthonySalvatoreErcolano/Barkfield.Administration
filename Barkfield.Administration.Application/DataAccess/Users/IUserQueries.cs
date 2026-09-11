@@ -10,6 +10,7 @@ namespace Barkfield.Administration.Application.DataAccess.Users
         public Task<UserDto?> GetUserByEmailAsync(string email, CancellationToken cancellationToken);
         public Task<UserDto?> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken);
         public Task<UserDetailDto?> GetUserAndRolesByUserIdAsync(Guid userId, CancellationToken cancellationToken);
+        public Task<IEnumerable<Guid>> GetUserRoles(Guid userId, CancellationToken cancellationToken);
 
     }
 }

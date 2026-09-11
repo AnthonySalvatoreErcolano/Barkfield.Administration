@@ -1,9 +1,10 @@
 ﻿using Barkfield.Administration.Domain.Identity.Roles;
+using Barkfield.Administration.Domain.Shared.Exceptions;
 using System;
 using System.Collections.Generic;
 using System.Text;
 
-namespace Barkfield.Administration.Domain.Identity
+namespace Barkfield.Administration.Domain.Entities
 {
     public class User
     {
