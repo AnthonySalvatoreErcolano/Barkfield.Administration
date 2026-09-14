@@ -1,5 +1,4 @@
-﻿using Barkfield.Administration.Domain.Identity.Roles;
-using Barkfield.Administration.Domain.Shared.Exceptions;
+﻿using Barkfield.Administration.Domain.Shared.Exceptions;
 using System;
 using System.Collections.Generic;
 using System.Text;
