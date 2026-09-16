@@ -1,4 +1,4 @@
-﻿namespace Barkfield.Administration.API.Models.Requests
+﻿namespace Barkfield.Administration.API.Models.Requests.Users
 {
     public class EditUserRequest
     {

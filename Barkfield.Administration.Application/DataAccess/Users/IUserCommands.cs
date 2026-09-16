@@ -1,7 +1,6 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Dtos;
 using Barkfield.Administration.Application.Repositories.Identity.Roles.UserRoles;
 using Barkfield.Administration.Domain.Entities.Identity.Tokens;
-using Barkfield.Administration.Domain.Identity;
 using System;
 using System.Collections.Generic;
 using System.Text;

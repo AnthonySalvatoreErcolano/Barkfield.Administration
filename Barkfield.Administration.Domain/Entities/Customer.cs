@@ -13,12 +13,13 @@ namespace Barkfield.Administration.Domain.Entities
         // Aggregate Identifier
         public Guid Id { get; private set; }
 
+        public string? SquareCustomerId { get; set; }
+
         // Domain Properties (Read-only outside the domain model)
         public string Email { get; private set; } = string.Empty;
         public string FirstName { get; private set; } = string.Empty;
         public string LastName { get; private set; } = string.Empty;
         public string? PhoneNumber { get; private set; }
-        public string? SquareCustomerId { get; private set; }
         public string? Notes { get; private set; }
         public Address? Address { get; private set; }
 

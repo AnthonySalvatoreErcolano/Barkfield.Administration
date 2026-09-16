@@ -1,4 +1,4 @@
-﻿using Barkfield.Administration.API.Models.Requests;
+﻿using Barkfield.Administration.API.Models.Requests.Identity;
 using Barkfield.Administration.API.Models.Responses.Identity;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Identity.Models;

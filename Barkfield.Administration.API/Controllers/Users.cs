@@ -1,5 +1,6 @@
 ﻿using Barkfield.Administration.API.Filters;
-using Barkfield.Administration.API.Models.Requests;
+using Barkfield.Administration.API.Models.Requests.Customers;
+using Barkfield.Administration.API.Models.Requests.Users;
 using Barkfield.Administration.Application.DataAccess.Dtos;
 using Barkfield.Administration.Application.DataAccess.Users;
 using Barkfield.Administration.Application.Exceptions;

@@ -1,11 +1,15 @@
 ﻿using Barkfield.Administration.Application.Services.Identity;
+using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.Services.Identity;
+using Barkfield.Administration.Infrastructure.Services.Square;
 using Barkfield.Administration.Infrastructure.Settings;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Square;
 using System;
 using System.Collections.Generic;
 using System.Net.Http.Headers;
@@ -57,36 +61,25 @@ namespace Barkfield.Administration.Infrastructure
         }
         private static void ConfigureSquare(this IServiceCollection services, IConfiguration configuration)
         {
-            var squareAccessToken = configuration["Square:AccessToken"]
-            ?? throw new InvalidOperationException("Square Access Token is missing from application settings.");
+            services.Configure<SquareSettings>(configuration.GetSection(SquareSettings.SectionName));
 
-            var baseAddress = configuration["Square:BaseUrl"] ?? "https://connect.squareupsandbox.com/";
-
-            //Configure base client
-            services.AddHttpClient("SquareClient", client =>
+            services.AddSingleton<ISquareClient>(sp =>
             {
-                client.BaseAddress = new Uri(baseAddress);
-                client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-                client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", squareAccessToken);
-                client.DefaultRequestHeaders.Add("Square-Version", "2026-06-23");
+                var options = sp.GetRequiredService<IOptions<SquareSettings>>().Value;
+              
+                Square.Environment env = options.Environment.Equals("Production", StringComparison.OrdinalIgnoreCase)
+                    ? Square.Environment.Production
+                    : Square.Environment.Sandbox;
+
+                return new SquareClient.Builder()
+                    .Environment(env)
+                    .AccessToken(options.AccessToken)
+                    .Build();
             });
 
-            //Bind named client to the service interface
-            //services.AddScoped<ISquareCatalogService, SquareCatalogServiceGateway>(sp =>
-            //{
-            //    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            //    var client = httpClientFactory.CreateClient("SquareClient");
+            services.AddScoped<ISquareService, SquareService>();
 
-            //    var logger = sp.GetRequiredService<ILogger<SquareCatalogServiceGateway>>();
-            //    return new SquareCatalogServiceGateway(client, logger);
-            //});
-
-            //services.AddScoped<ISquareCustomerService, SquareCustomerServiceGateway>(sp =>
-            //{
-            //    var httpClientFactory = sp.GetRequiredService<IHttpClientFactory>();
-            //    var client = httpClientFactory.CreateClient("SquareClient");
-            //    return new SquareCustomerServiceGateway(client);
-            //});
+            return services;
 
         }
     }
