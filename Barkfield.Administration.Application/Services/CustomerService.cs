@@ -26,42 +26,27 @@ namespace Barkfield.Administration.Application.Services
             return await _squareService.SearchCustomersAsync(email, phoneNumber, cancellationToken);
         }
 
-        public async Task<Guid> CreateCustomerWorkflowAsync(
-            CustomerDto dto,
-            CancellationToken cancellationToken = default)
+        public async Task<Guid> CreateCustomerAsync(CustomerDto dto,CancellationToken cancellationToken = default)
         {
             string? finalSquareId = dto.SquareCustomerId;
 
             // 1. Provision new customer in Square if no existing Square profile was selected
             if (string.IsNullOrWhiteSpace(finalSquareId))
             {
-                Address? address = null;
-                if (!string.IsNullOrWhiteSpace(command.AddressLine1) || !string.IsNullOrWhiteSpace(command.City))
-                {
-                    address = Address.Create(
-                        command.AddressLine1,
-                        command.AddressLine2,
-                        command.City,
-                        command.State,
-                        command.PostalCode
-                    );
-                }
-
+               
                 finalSquareId = await _squareService.CreateCustomerAsync(
-                    command.FirstName,
-                    command.LastName,
-                    command.Email,
-                    command.PhoneNumber,
-                    address,
-                    command.Notes,
+                    dto.FirstName,
+                    dto.LastName,
+                    dto.Email,
+                    dto.PhoneNumber,
+                    dto.Address,
+                    dto.Notes,
                     cancellationToken
                 );
             }
+            dto.SquareCustomerId = finalSquareId;
 
-            // 2. Pass final command payload containing guaranteed Square ID to persistence command
-            var commandWithSquareId = command with { SquareCustomerId = finalSquareId };
-
-            return await _customerCommands.CreateCustomerAsync(commandWithSquareId, cancellationToken);
+            return await _customerCommands.CreateCustomerAsync(dto, cancellationToken);
         }
     }
 }

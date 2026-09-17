@@ -5,14 +5,7 @@ namespace Barkfield.Administration.Application.DataAccess.Customers
 {
     public class CustomerDto
     {
-        public CustomerDto(
-            string firstName,
-            string lastName,
-            string email,
-            string? phoneNumber = null,
-            string? notes = null,
-            Address? address = null,
-            string? squareCustomerId = null)
+        public CustomerDto(string firstName,string lastName,string email,string? phoneNumber = null,       string? notes = null,Address? address = null,string? squareCustomerId = null)
         {
             Id = Guid.NewGuid();
             FirstName = firstName;
@@ -25,16 +18,7 @@ namespace Barkfield.Administration.Application.DataAccess.Customers
             CreatedAt = DateTime.UtcNow;
         }
 
-        public CustomerDto(
-            string? squareCustomerId,
-            string email,
-            string firstName,
-            string lastName,
-            string? phoneNumber,
-            string? notes,
-            Address? address,
-            DateTime createdAt,
-            DateTime? updatedAt)
+        public CustomerDto( string? squareCustomerId,string email,string firstName,string lastName,string? phoneNumber,string? notes,Address? address,DateTime createdAt,DateTime? updatedAt)
         {
             SquareCustomerId = squareCustomerId;
             Email = email;

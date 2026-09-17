@@ -6,5 +6,6 @@ namespace Barkfield.Administration.Application.DataAccess.Customers
 {
     public interface ICustomerCommands
     {
+        public Task<Guid> CreateCustomerAsync(CustomerDto dto, CancellationToken cancellationToken = default);
     }
 }

@@ -17,10 +17,11 @@ namespace Barkfield.Administration.API.Controllers
     public class Customers : ControllerBase
     {
         private readonly ICustomerQueries _customerQueries;
-
-        public Customers(ICustomerQueries customerQueries)
+        private readonly CustomerService _customerService;
+        public Customers(ICustomerQueries customerQueries, CustomerService customerService  )
         {
             _customerQueries = customerQueries;
+            _customerService = customerService;
         }
 
         [HttpGet("{customerId:guid}")]
@@ -72,6 +73,8 @@ namespace Barkfield.Administration.API.Controllers
 
             return Ok(candidates);
         }
+
+
         // Fix the domain object reference 
         /// <summary>
         /// Provisions a new customer in Square (if required) and creates the local database record.
@@ -79,19 +82,13 @@ namespace Barkfield.Administration.API.Controllers
         [HttpPost]
         [ProducesResponseType(typeof(CustomerDto), StatusCodes.Status201Created)]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<IActionResult> CreateCustomer(
-            [FromBody] CreateCustomerRequest request,
-            CancellationToken cancellationToken)
+        public async Task<IActionResult> CreateCustomer([FromBody] CreateCustomerRequest request,CancellationToken cancellationToken)
         {
             Address? address = null;
-            if (!string.IsNullOrWhiteSpace(request.AddressLine1) || !string.IsNullOrWhiteSpace(request.City))
+            if (!string.IsNullOrWhiteSpace(request.Address) || !string.IsNullOrWhiteSpace(request.City))
             {
-                address = new Address(
-                    request.AddressLine1 ?? string.Empty,
-                    request.City ?? string.Empty,
-                    request.State ?? string.Empty,
-                    request.PostalCode ?? string.Empty
-                );
+                address = new Address(request.Address ?? string.Empty,request.City ?? string.Empty,
+                    request.State ?? string.Empty,request.PostalCode ?? string.Empty);
             }
 
             var customerDto = new CustomerDto(
@@ -104,9 +101,9 @@ namespace Barkfield.Administration.API.Controllers
                 squareCustomerId: request.SquareCustomerId
             );
 
-            Guid customerId = await _customerService.CreateCustomerWorkflowAsync(command, cancellationToken);
+            Guid customerId = await _customerService.CreateCustomerAsync(customerDto, cancellationToken);
 
-            CustomerDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
+            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
 
             if (customer is null)
             {

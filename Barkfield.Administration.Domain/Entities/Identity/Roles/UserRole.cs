@@ -1,4 +1,6 @@
-﻿namespace Barkfield.Administration.Domain.Entities.Identity.Roles;
+﻿using Barkfield.Administration.Domain.Shared.Exceptions;
+
+namespace Barkfield.Administration.Domain.Entities.Identity.Roles;
 
 public class UserRole
 {
