@@ -61,7 +61,12 @@ namespace Barkfield.Administration.API.Controllers
         public async Task<IActionResult> CreateUser([FromBody] CreateUserRequest request,
            CancellationToken cancellationToken)
         {
-            Guid userId = await _userService.CreateUserAsync(request.Email, request.Name, request.UserRoles, request.Password, cancellationToken);
+            Guid userId = await _userService.CreateUserAsync(
+                email: request.Email,
+                name: request.Name,
+                roles: request.UserRoles,
+                password: request.Password,
+                cancellationToken: cancellationToken);
             return CreatedAtAction(nameof(GetUserById), new { userId }, userId);
         }
 
@@ -81,7 +86,12 @@ namespace Barkfield.Administration.API.Controllers
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> EditUser([FromBody] EditUserRequest request, CancellationToken cancellationToken)
         {
-            await _userService.UpdateUserAsync( request.UserId, request.Name, request.Email,request.UserRoles, cancellationToken);
+            await _userService.UpdateUserAsync(
+                userId: request.UserId,
+                name: request.Name,
+                email: request.Email,
+                roles: request.UserRoles,
+                cancellationToken: cancellationToken);
 
             return Ok();
         }

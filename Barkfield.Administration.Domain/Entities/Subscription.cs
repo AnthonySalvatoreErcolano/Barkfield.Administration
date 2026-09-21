@@ -5,7 +5,7 @@ using System.Text;
 
 namespace Barkfield.Administration.Domain.Entities
 {
-    internal class Subscription
+    public class Subscription
     {
         public Guid Id { get; private init; }
         public Guid CustomerId { get; private init; }

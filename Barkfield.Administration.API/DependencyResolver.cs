@@ -11,6 +11,7 @@ namespace Barkfield.Administration.API
         public static void Resolver(this WebApplicationBuilder builder)
         {
             builder.Services.AddControllers();
+            builder.Services.AddHttpContextAccessor();
             builder.Services.AddOpenApi();
             builder.Services.AddSignalR();
             builder.Services.AddMemoryCache();

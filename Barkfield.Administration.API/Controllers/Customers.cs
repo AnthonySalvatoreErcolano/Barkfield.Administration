@@ -116,10 +116,13 @@ namespace Barkfield.Administration.API.Controllers
                 throw new NotFoundException($"Customer with ID '{customerId}' was not found after creation.");
             }
 
-            return CreatedAtAction(nameof(GetCustomerById), new { id = customerId }, customer);
+            return CreatedAtAction(nameof(GetCustomerById), new { customerId }, customer);
         }
 
 
+        /// <summary>
+        /// Updates an existing customer's profile, syncing the change to Square when the account is linked.
+        /// </summary>
         [HttpPut("edit-customer")]
         [RequirePermission("customer:edit")]
         [ProducesResponseType(StatusCodes.Status200OK)]
@@ -146,16 +149,16 @@ namespace Barkfield.Administration.API.Controllers
                 squareCustomerId: request.SquareCustomerId
             );
 
-            Guid customerId = await _customerService.CreateCustomerAsync(customerDto, cancellationToken);
+            await _customerService.UpdateCustomerAsync(request.CustomerId, customerDto, cancellationToken);
 
-            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
+            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(request.CustomerId, cancellationToken);
 
             if (customer is null)
             {
-                throw new NotFoundException($"Customer with ID '{customerId}' was not found after creation.");
+                throw new NotFoundException($"Customer with ID '{request.CustomerId}' was not found after update.");
             }
 
-            return CreatedAtAction(nameof(GetCustomerById), new { id = customerId }, customer);
+            return Ok(customer);
         }
     }
 }

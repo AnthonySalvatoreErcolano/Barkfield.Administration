@@ -45,7 +45,7 @@ namespace Barkfield.Administration.Infrastructure.DataAccess.Customers
             }
 
             string countSql = $"SELECT COUNT(1) {builder}";
-            int totalCount = await _sqlExecutor.ExecuteAsync(countSql, dynamicParams, cancellationToken);
+            int totalCount = await _sqlExecutor.QuerySingleAsync<int>(countSql, dynamicParams, cancellationToken);
 
 
             builder.Append(" ORDER BY c.CreatedAt DESC OFFSET @Skip ROWS FETCH NEXT @PageSize ROWS ONLY;");
@@ -71,67 +71,6 @@ namespace Barkfield.Administration.Infrastructure.DataAccess.Customers
         public Task<CustomerDetailDto?> GetCustomerByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException();
-        }
-
-        public async Task<Guid> CreateCustomerAsync(
-        CreateCustomerCommand command,
-        CancellationToken cancellationToken = default)
-        {
-            // 1. Build optional Address Value Object
-            Address? address = null;
-            if (!string.IsNullOrWhiteSpace(command.AddressLine1) || !string.IsNullOrWhiteSpace(command.City))
-            {
-                address = Address.Create(
-                    command.AddressLine1,
-                    command.AddressLine2,
-                    command.City,
-                    command.State,
-                    command.PostalCode
-                );
-            }
-
-            // 2. Instantiate Customer Aggregate Root (enforces invariants & validations)
-            Customer customer = Customer.Create(
-                command.FirstName,
-                command.LastName,
-                command.Email,
-                command.PhoneNumber,
-                address,
-                command.Notes,
-                command.SquareCustomerId
-            );
-
-            // 3. Map Domain Aggregate -> Persistence Parameters for SQL Server
-            var customerParams = new
-            {
-                customer.Id,
-                customer.FirstName,
-                customer.LastName,
-                customer.Email,
-                customer.PhoneNumber,
-                customer.SquareCustomerId,
-                customer.Notes,
-                AddressLine1 = customer.Address?.Line1,
-                AddressLine2 = customer.Address?.Line2,
-                City = customer.Address?.City,
-                State = customer.Address?.State,
-                PostalCode = customer.Address?.PostalCode,
-                customer.CreatedAt
-            };
-
-            const string insertSql = @"
-            INSERT INTO Customers (
-                Id, FirstName, LastName, Email, PhoneNumber, SquareCustomerId, Notes,
-                AddressLine1, AddressLine2, City, State, PostalCode, CreatedAt
-            )
-            VALUES (
-                @Id, @FirstName, @LastName, @Email, @PhoneNumber, @SquareCustomerId, @Notes,
-                @AddressLine1, @AddressLine2, @City, @State, @PostalCode, @CreatedAt
-            );";
-
-            await _sqlExecutor.ExecuteAsync(insertSql, customerParams, cancellationToken);
-
-            return customer.Id;
         }
     }
 }

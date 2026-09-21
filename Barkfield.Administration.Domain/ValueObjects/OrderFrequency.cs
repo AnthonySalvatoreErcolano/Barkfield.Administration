@@ -10,7 +10,7 @@ namespace Barkfield.Administration.Domain.ValueObjects
         Weeks,
         Months
     }
-    internal class OrderFrequency
+    public class OrderFrequency
     {
         public int Interval { get; private init; }
         public FrequencyUnit Unit { get; private init; }

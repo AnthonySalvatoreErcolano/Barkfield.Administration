@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Barkfield.Administration.Domain.Entities.Identity.Roles
 {
-    internal class Role
+    public class Role
     {
         public int Id { get; set; }
         public string Name { get; set; }

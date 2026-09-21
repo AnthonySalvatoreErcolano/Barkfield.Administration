@@ -4,7 +4,7 @@ using System.Text;
 
 namespace Barkfield.Administration.Application.Repositories.Identity.Roles.UserRoles
 {
-    public class IUserRoleCommands
+    public interface IUserRoleCommands
     {
         public Task Create(IEnumerable<UserRoleDto> userRoles, CancellationToken cancellationToken);
     }

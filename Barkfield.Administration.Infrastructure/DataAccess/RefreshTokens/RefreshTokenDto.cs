@@ -9,6 +9,5 @@ namespace Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens
     DateTime ExpiresAt,
     DateTime? RevokedAt,
     string Email,
-    bool IsActive)
- 
+    bool IsActive);
 }

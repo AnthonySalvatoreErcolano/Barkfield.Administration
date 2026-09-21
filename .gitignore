@@ -361,3 +361,5 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Local working notes for Claude Code sessions (contains commercial terms - do not ship)
+memory.md

@@ -22,5 +22,10 @@ namespace Barkfield.Administration.Infrastructure.DataAccess.Users
         {
             throw new NotImplementedException();
         }
+
+        public Task<IEnumerable<Guid>> GetUserRoles(Guid userId, CancellationToken cancellationToken)
+        {
+            throw new NotImplementedException();
+        }
     }
 }

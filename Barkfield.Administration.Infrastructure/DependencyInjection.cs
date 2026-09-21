@@ -1,6 +1,12 @@
-﻿using Barkfield.Administration.Application.Services.Identity;
+﻿using Barkfield.Administration.Application.DataAccess.Customers;
+using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
+using Barkfield.Administration.Application.DataAccess.Users;
+using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
+using Barkfield.Administration.Infrastructure.DataAccess.Customers;
+using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
+using Barkfield.Administration.Infrastructure.DataAccess.Users;
 using Barkfield.Administration.Infrastructure.Services.Identity;
 using Barkfield.Administration.Infrastructure.Services.Square;
 using Barkfield.Administration.Infrastructure.Settings;
@@ -41,23 +47,36 @@ namespace Barkfield.Administration.Infrastructure
             services.AddScoped<ISqlExecutor, SqlExecutor>();
             //services.AddScoped<IBlobStorageService, BlobStorageService>();
 
-
+            services.AddDataAccess();
 
             return services;
         }
 
         private static void ConfigureIdentity(this IServiceCollection services, IConfiguration configuration)
         {
-            services.Configure<JwtSettings>(configuration.GetSection("JwtSettings"));
+            services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
 
-            services.AddSingleton<PasswordHasher>();
+            // NOTE: IHttpContextAccessor is registered by the API layer (AddHttpContextAccessor),
+            // which is where the ASP.NET Core hosting packages are referenced.
+            services.AddSingleton<IPasswordHasher, PasswordHasher>();
+            services.AddScoped<ITokenGenerator, TokenGenerator>();
+            services.AddScoped<ICookieService, CookieService>();
             services.AddScoped<IIdentityService, IdentityService>();
+        }
 
-            //var jwtSettings = configuration.GetSection("JwtSettings").Get<JwtSettings>()
-            //    ?? throw new InvalidOperationException("JWT settings are missing from application settings.");
-            //services.AddSingleton(jwtSettings);
-            //services.AddScoped<ITokenService, TokenService>();
-            //services.AddScoped<IPasswordHasher, PasswordHasher>();
+        /// <summary>
+        /// Registers the Dapper-backed query/command implementations of the Application layer contracts.
+        /// </summary>
+        private static void AddDataAccess(this IServiceCollection services)
+        {
+            services.AddScoped<ICustomerQueries, CustomerQueries>();
+            services.AddScoped<IUserQueries, UserQueries>();
+            services.AddScoped<IRefreshTokenQueries, RefreshTokenQueries>();
+            services.AddScoped<IRefreshTokenCommands, RefreshTokenCommands>();
+
+            // TODO(chunk 2/3): ICustomerCommands, IUserCommands, IUserRoleCommands and
+            // IUserRoleQueries have no implementations yet. Until they exist, resolving
+            // CustomerService / UserService / IIdentityService will fail at startup.
         }
         private static void ConfigureSquare(this IServiceCollection services, IConfiguration configuration)
         {
@@ -66,21 +85,15 @@ namespace Barkfield.Administration.Infrastructure
             services.AddSingleton<ISquareClient>(sp =>
             {
                 var options = sp.GetRequiredService<IOptions<SquareSettings>>().Value;
-              
-                Square.Environment env = options.Environment.Equals("Production", StringComparison.OrdinalIgnoreCase)
-                    ? Square.Environment.Production
-                    : Square.Environment.Sandbox;
 
-                return new SquareClient.Builder()
-                    .Environment(env)
-                    .AccessToken(options.AccessToken)
-                    .Build();
+                string baseUrl = options.Environment.Equals("Production", StringComparison.OrdinalIgnoreCase)
+                    ? SquareEnvironment.Production
+                    : SquareEnvironment.Sandbox;
+
+                return new SquareClient(options.AccessToken, new ClientOptions { BaseUrl = baseUrl });
             });
 
             services.AddScoped<ISquareService, SquareService>();
-
-            return services;
-
         }
     }
 }

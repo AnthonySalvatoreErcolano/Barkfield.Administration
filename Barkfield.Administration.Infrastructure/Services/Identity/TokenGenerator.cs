@@ -1,4 +1,5 @@
-﻿using Barkfield.Administration.Infrastructure.Settings;
+﻿using Barkfield.Administration.Application.Services.Identity;
+using Barkfield.Administration.Infrastructure.Settings;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System;

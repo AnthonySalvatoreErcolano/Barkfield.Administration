@@ -25,9 +25,9 @@ namespace Barkfield.Administration.Infrastructure.Connections.Database
         private readonly IDbConnection _cnn;
         private readonly ILogger<SqlExecutor> _logger;
 
-        public SqlExecutor(ILogger<SqlExecutor> logger, IDbConnection connection)
+        public SqlExecutor(ILogger<SqlExecutor> logger, ISqlConnectionFactory connectionFactory)
         {
-            _cnn = connection;
+            _cnn = connectionFactory.CreateConnection();
             _logger = logger;
         }
 
