@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace Barkfield.Administration.Application.Services.Sqaure
+namespace Barkfield.Administration.Application.Services.Sqaure.Dtos
 {
     public record SquareCustomerCandidateDto(
      string SquareCustomerId,

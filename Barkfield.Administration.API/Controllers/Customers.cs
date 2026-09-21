@@ -1,11 +1,12 @@
-﻿using Barkfield.Administration.API.Models.Requests.Customers;
+﻿using Barkfield.Administration.API.Filters;
+using Barkfield.Administration.API.Models.Requests.Customers;
 using Barkfield.Administration.API.Models.Requests.Square;
 using Barkfield.Administration.Application.Common;
 using Barkfield.Administration.Application.DataAccess.Customers;
 using Barkfield.Administration.Application.DataAccess.Dtos;
 using Barkfield.Administration.Application.Exceptions;
 using Barkfield.Administration.Application.Services;
-using Barkfield.Administration.Application.Services.Sqaure;
+using Barkfield.Administration.Application.Services.Sqaure.Dtos;
 using Barkfield.Administration.Domain.ValueObjects;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +25,13 @@ namespace Barkfield.Administration.API.Controllers
             _customerService = customerService;
         }
 
+
+        /// <summary>
+        /// Retrieves detailed information about a specific customer along with the list of pets by their unique identifier.
+        /// </summary>
+        /// <param name="customerId"></param>
+        /// <param name="cancellationToken"></param>
+        /// <returns></returns>
         [HttpGet("{customerId:guid}")]
         [ProducesResponseType(typeof(CustomerDetailDto), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -62,8 +70,7 @@ namespace Barkfield.Administration.API.Controllers
         /// </summary>
         [HttpPost("search-square")]
         [ProducesResponseType(typeof(IEnumerable<SquareCustomerCandidateDto>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> SearchSquareCustomers(
-            [FromBody] SearchSquareCustomerRequest request,
+        public async Task<IActionResult> SearchSquareCustomers( [FromBody] SearchSquareCustomerRequest request,
             CancellationToken cancellationToken)
         {
             var candidates = await _customerService.SearchSquareCustomersAsync(
@@ -75,7 +82,6 @@ namespace Barkfield.Administration.API.Controllers
         }
 
 
-        // Fix the domain object reference 
         /// <summary>
         /// Provisions a new customer in Square (if required) and creates the local database record.
         /// </summary>
@@ -89,6 +95,45 @@ namespace Barkfield.Administration.API.Controllers
             {
                 address = new Address(request.Address ?? string.Empty,request.City ?? string.Empty,
                     request.State ?? string.Empty,request.PostalCode ?? string.Empty);
+            }
+
+            var customerDto = new CustomerDto(
+                firstName: request.FirstName,
+                lastName: request.LastName,
+                email: request.Email,
+                phoneNumber: request.PhoneNumber,
+                notes: request.Notes,
+                address: address,
+                squareCustomerId: request.SquareCustomerId
+            );
+
+            Guid customerId = await _customerService.CreateCustomerAsync(customerDto, cancellationToken);
+
+            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
+
+            if (customer is null)
+            {
+                throw new NotFoundException($"Customer with ID '{customerId}' was not found after creation.");
+            }
+
+            return CreatedAtAction(nameof(GetCustomerById), new { id = customerId }, customer);
+        }
+
+
+        [HttpPut("edit-customer")]
+        [RequirePermission("customer:edit")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> EditCustomer([FromBody] EditCustomerRequest request, CancellationToken cancellationToken)
+        {
+            Address? address = null;
+            if (!string.IsNullOrWhiteSpace(request.Address) || !string.IsNullOrWhiteSpace(request.City))
+            {
+                address = new Address(request.Address ?? string.Empty, request.City ?? string.Empty,
+                    request.State ?? string.Empty, request.PostalCode ?? string.Empty);
             }
 
             var customerDto = new CustomerDto(

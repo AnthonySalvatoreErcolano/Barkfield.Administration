@@ -100,8 +100,7 @@ public class Pet
     {
         ArgumentNullException.ThrowIfNull(allergy);
 
-        // Prevent duplicate allergy entries
-        if (_allergies.Any(a => a.Name.Equals(allergy.Name, StringComparison.OrdinalIgnoreCase)))
+        if (_allergies.Any(a => a.AllergyId == allergy.AllergyId))
             return;
 
         _allergies.Add(allergy);
@@ -109,13 +108,13 @@ public class Pet
     }
 
     /// <summary>
-    /// Removes an allergy by name.
+    /// Removes an allergy by id.
     /// </summary>
-    public void RemoveAllergy(string allergyName)
+    public void RemoveAllergy(Guid allergyId)
     {
-        if (string.IsNullOrWhiteSpace(allergyName)) return;
+        if (allergyId == Guid.Empty) return;
 
-        int removedCount = _allergies.RemoveAll(a => a.Name.Equals(allergyName.Trim(), StringComparison.OrdinalIgnoreCase));
+        int removedCount = _allergies.RemoveAll(a => a.AllergyId == allergyId);
         if (removedCount > 0)
         {
             UpdatedAt = DateTime.UtcNow;

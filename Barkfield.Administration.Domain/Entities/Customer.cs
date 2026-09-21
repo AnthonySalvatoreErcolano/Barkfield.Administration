@@ -63,19 +63,16 @@ namespace Barkfield.Administration.Domain.Entities
         }
 
 
-        /// <summary>
-        /// Updates the customer's personal contact details.
-        /// </summary>
-        public void UpdateProfile(string firstName, string lastName, string email, string? phoneNumber)
+        public void Update( string firstName, string lastName, string email,string? phoneNumber,string? notes,
+         Address? address,string? squareCustomerId)
         {
-            ValidateName(firstName, nameof(firstName));
-            ValidateName(lastName, nameof(lastName));
-            ValidateEmail(email);
-
-            FirstName = firstName.Trim();
-            LastName = lastName.Trim();
-            Email = email.Trim().ToLowerInvariant();
-            PhoneNumber = NormalizePhoneNumber(phoneNumber);
+            FirstName = firstName;
+            LastName = lastName;
+            Email = email;
+            PhoneNumber = phoneNumber;
+            Notes = notes;
+            Address = address;
+            SquareCustomerId = squareCustomerId;
             UpdatedAt = DateTime.UtcNow;
         }
 
@@ -103,7 +100,6 @@ namespace Barkfield.Administration.Domain.Entities
         /// <summary>
         /// Updates administrative notes regarding the customer account.
         /// </summary>
-
         public void UpdateNotes(string? notes)
         {
             Notes = notes?.Trim();

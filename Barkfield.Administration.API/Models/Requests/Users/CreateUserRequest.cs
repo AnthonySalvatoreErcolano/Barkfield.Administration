@@ -1,4 +1,4 @@
-﻿namespace Barkfield.Administration.API.Models.Requests.Customers
+﻿namespace Barkfield.Administration.API.Models.Requests.Users
 {
     public class CreateUserRequest
     {

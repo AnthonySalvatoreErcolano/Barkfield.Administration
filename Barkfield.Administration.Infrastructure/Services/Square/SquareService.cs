@@ -1,5 +1,6 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Customers;
 using Barkfield.Administration.Application.Services.Sqaure;
+using Barkfield.Administration.Application.Services.Sqaure.Dtos;
 using Barkfield.Administration.Domain.ValueObjects;
 using Microsoft.Extensions.Logging;
 using Square;
