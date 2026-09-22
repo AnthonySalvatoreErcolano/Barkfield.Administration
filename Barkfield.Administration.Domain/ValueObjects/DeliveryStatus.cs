@@ -9,18 +9,21 @@ public enum DeliveryStatus
     /// <summary>Created from the subscription manifest, not yet picked.</summary>
     Scheduled = 1,
 
-    /// <summary>Picked and packed, waiting to go out.</summary>
+    /// <summary>Picked and packed, waiting to be assigned to a route.</summary>
     Packed = 2,
 
-    /// <summary>Handed to the driver / on a dispatched route.</summary>
-    OutForDelivery = 3,
+    /// <summary>On a published route, waiting to be loaded and driven.</summary>
+    Routed = 3,
+
+    /// <summary>Loaded and on the road.</summary>
+    OutForDelivery = 4,
 
     /// <summary>Completed. Rotation has advanced and add-ons have been consumed.</summary>
-    Delivered = 4,
+    Delivered = 5,
 
     /// <summary>Attempted but not completed (nobody home, refused, damaged).</summary>
-    Failed = 5,
+    Failed = 6,
 
     /// <summary>Called off before it shipped.</summary>
-    Canceled = 6
+    Canceled = 7
 }

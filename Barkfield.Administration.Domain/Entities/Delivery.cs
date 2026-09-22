@@ -48,11 +48,24 @@ public class Delivery
     /// <summary>Astro Loyalty rewards applied. Phase 2 automates this; staff tick it until then.</summary>
     public bool AstroCompleted { get; private set; }
 
-    /// <summary>Identifier of the Routific route this delivery was dispatched on, once assigned.</summary>
-    public string? RouteId { get; private set; }
+    /// <summary>The customer location this delivery goes to.</summary>
+    public Guid DeliveryLocationId { get; private set; }
 
-    /// <summary>Identifier of this delivery's stop within the Routific route. Correlates webhooks back to us.</summary>
-    public string? RouteStopId { get; private set; }
+    /// <summary>
+    /// Address as it was when the delivery was scheduled. Snapshotted for the same reason line
+    /// items snapshot product name and price: a customer moving house must not rewrite where
+    /// last month's delivery went.
+    /// </summary>
+    public Address DeliveryAddress { get; private set; } = null!;
+
+    /// <summary>Coordinates as snapshotted at scheduling time. What the optimiser routes to.</summary>
+    public GeoPoint? DeliveryCoordinates { get; private set; }
+
+    /// <summary>Per-delivery override of the location's preferred window.</summary>
+    public TimeWindow? RequestedWindow { get; private set; }
+
+    /// <summary>Per-delivery override of the location's default stop duration, in minutes.</summary>
+    public int? ServiceDurationMinutesOverride { get; private set; }
 
     public string? Notes { get; private set; }
 
@@ -88,12 +101,16 @@ public class Delivery
     /// The products referenced by the manifest, keyed by product id. The caller resolves these;
     /// the domain does not read from storage.
     /// </param>
+    /// <param name="location">
+    /// Where this delivery goes. Its address and coordinates are snapshotted onto the delivery.
+    /// </param>
     public static Delivery Schedule(
         Guid subscriptionId,
         Guid customerId,
         DeliveryManifest manifest,
         FulfillmentMethod fulfillmentMethod,
-        IReadOnlyDictionary<Guid, Product> catalog)
+        IReadOnlyDictionary<Guid, Product> catalog,
+        DeliveryLocation location)
     {
         if (subscriptionId == Guid.Empty)
             throw new DomainException("A delivery must belong to a valid subscription.");
@@ -103,6 +120,10 @@ public class Delivery
 
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(location);
+
+        if (location.CustomerId != customerId)
+            throw new DomainException("The delivery location belongs to a different customer.");
 
         manifest.EnsureNotEmpty();
 
@@ -115,6 +136,10 @@ public class Delivery
             Status = DeliveryStatus.Scheduled,
             FulfillmentMethod = fulfillmentMethod,
             ProcurementStatus = ProcurementStatus.NotStarted,
+            DeliveryLocationId = location.Id,
+            DeliveryAddress = location.Address,
+            DeliveryCoordinates = location.Coordinates,
+            RequestedWindow = location.PreferredWindow,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -147,8 +172,11 @@ public class Delivery
         ProcurementStatus procurementStatus,
         bool hasPaid,
         bool astroCompleted,
-        string? routeId,
-        string? routeStopId,
+        Guid deliveryLocationId,
+        Address deliveryAddress,
+        GeoPoint? deliveryCoordinates,
+        TimeWindow? requestedWindow,
+        int? serviceDurationMinutesOverride,
         string? notes,
         string? failureReason,
         DateTime createdAt,
@@ -170,8 +198,11 @@ public class Delivery
             ProcurementStatus = procurementStatus,
             HasPaid = hasPaid,
             AstroCompleted = astroCompleted,
-            RouteId = routeId,
-            RouteStopId = routeStopId,
+            DeliveryLocationId = deliveryLocationId,
+            DeliveryAddress = deliveryAddress,
+            DeliveryCoordinates = deliveryCoordinates,
+            RequestedWindow = requestedWindow,
+            ServiceDurationMinutesOverride = serviceDurationMinutesOverride,
             Notes = notes,
             FailureReason = failureReason,
             CreatedAt = createdAt,
@@ -314,21 +345,15 @@ public class Delivery
     // --- Workflow (Routific webhooks, idempotent) --------------------------
 
     /// <summary>
-    /// Applies a "dispatched / out for delivery" event from Routific.
+    /// Marks the delivery as out on the road. Called when the driver starts the run.
     /// </summary>
-    /// <returns>True if this changed anything; false if it was a duplicate or stale event.</returns>
+    /// <returns>True if this changed anything; false if it was a duplicate or stale action.</returns>
     /// <remarks>
-    /// Webhooks retry and arrive out of order, so this never throws on a repeat. It also tolerates
-    /// staff having skipped the Packed step, which the strict <see cref="MarkOutForDelivery"/> would not.
+    /// Tolerant by design: the driver app queues actions while out of signal and replays them,
+    /// so repeats and out-of-order arrivals must be no-ops rather than errors.
     /// </remarks>
-    public bool RecordDispatched(string? routeStopId = null)
+    public bool RecordDispatched()
     {
-        if (!string.IsNullOrWhiteSpace(routeStopId) && RouteStopId != routeStopId)
-        {
-            RouteStopId = routeStopId.Trim();
-            Touch();
-        }
-
         if (Rank(Status) >= Rank(DeliveryStatus.OutForDelivery)) return false;
 
         Status = DeliveryStatus.OutForDelivery;
@@ -337,7 +362,7 @@ public class Delivery
     }
 
     /// <summary>
-    /// Applies a "stop completed" event from Routific.
+    /// Records a completed delivery from the driver app.
     /// </summary>
     /// <returns>True if this changed anything; false if it was a duplicate or the delivery was canceled.</returns>
     public bool RecordDelivered(DateTime deliveredOn)
@@ -365,24 +390,57 @@ public class Delivery
         return true;
     }
 
-    // --- Route & flags -----------------------------------------------------
+    // --- Routing & flags ---------------------------------------------------
 
-    public void AssignRoute(string routeId, string? routeStopId = null)
+    /// <summary>
+    /// Marks the delivery as sitting on a published route.
+    /// </summary>
+    /// <remarks>
+    /// The route/stop link itself lives on <see cref="RouteStop"/>, which is the single source of
+    /// truth for which route a delivery is on. This only mirrors the workflow state.
+    /// </remarks>
+    public void MarkRouted()
     {
-        if (string.IsNullOrWhiteSpace(routeId))
-            throw new DomainException("A route identifier is required.");
-
         EnsureOpen();
 
-        RouteId = routeId.Trim();
-        RouteStopId = string.IsNullOrWhiteSpace(routeStopId) ? RouteStopId : routeStopId.Trim();
+        if (Status is not (DeliveryStatus.Packed or DeliveryStatus.Routed))
+            throw new DomainException($"A delivery in '{Status}' cannot be routed; it must be packed first.");
+
+        Status = DeliveryStatus.Routed;
         Touch();
     }
 
-    public void ClearRoute()
+    /// <summary>
+    /// Returns a routed delivery to the packed pool, when it is pulled off a route.
+    /// </summary>
+    public void ClearRouted()
     {
-        RouteId = null;
-        RouteStopId = null;
+        EnsureOpen();
+
+        if (Status != DeliveryStatus.Routed) return;
+
+        Status = DeliveryStatus.Packed;
+        Touch();
+    }
+
+    /// <summary>Overrides the location's preferred delivery window for this delivery only.</summary>
+    public void SetRequestedWindow(TimeWindow? window)
+    {
+        EnsureOpen();
+
+        RequestedWindow = window;
+        Touch();
+    }
+
+    /// <summary>Overrides the location's default stop duration for this delivery only.</summary>
+    public void SetServiceDurationOverride(int? minutes)
+    {
+        if (minutes is < 0 or > 480)
+            throw new DomainException("Service duration must be between 0 and 480 minutes.");
+
+        EnsureOpen();
+
+        ServiceDurationMinutesOverride = minutes;
         Touch();
     }
 
@@ -452,8 +510,9 @@ public class Delivery
     {
         DeliveryStatus.Scheduled => 0,
         DeliveryStatus.Packed => 1,
-        DeliveryStatus.OutForDelivery => 2,
-        _ => 3
+        DeliveryStatus.Routed => 2,
+        DeliveryStatus.OutForDelivery => 3,
+        _ => 4
     };
 
     private void EnsureOpen()
