@@ -1,164 +1,269 @@
-﻿using Barkfield.Administration.API.Filters;
+using Barkfield.Administration.API.Filters;
 using Barkfield.Administration.API.Models.Requests.Customers;
 using Barkfield.Administration.API.Models.Requests.Square;
+using Barkfield.Administration.API.Models.Responses.Customers;
 using Barkfield.Administration.Application.Common;
 using Barkfield.Administration.Application.DataAccess.Customers;
-using Barkfield.Administration.Application.DataAccess.Dtos;
-using Barkfield.Administration.Application.Exceptions;
 using Barkfield.Administration.Application.Services;
 using Barkfield.Administration.Application.Services.Sqaure.Dtos;
+using Barkfield.Administration.Domain.Entities.Identity.Constants;
 using Barkfield.Administration.Domain.ValueObjects;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
-namespace Barkfield.Administration.API.Controllers
+namespace Barkfield.Administration.API.Controllers;
+
+/// <summary>
+/// Customer records, their pets, and keeping the linked Square profile in step.
+/// </summary>
+/// <remarks>
+/// Endpoints are deliberately granular and resource-shaped. Page-level composition —
+/// pulling a customer together with their subscriptions and delivery history — is done by
+/// the UI's own layer, which calls several of these.
+/// </remarks>
+[ApiController]
+[Route("api/customers")]
+[Authorize]
+public class CustomersController(ICustomerQueries customerQueries, CustomerService customerService) : ControllerBase
 {
-    [Route("api/[controller]")]
-    [ApiController]
-    public class Customers : ControllerBase
+    private readonly ICustomerQueries _customerQueries = customerQueries;
+    private readonly CustomerService _customerService = customerService;
+
+    /// <summary>
+    /// Returns a paged, searchable, sortable list of customers for the dashboard.
+    /// </summary>
+    /// <param name="filter">
+    /// Search, filter, sort and paging, from the query string. Deactivated customers are
+    /// excluded unless <c>includeInactive</c> is set. Sort keys: name, email, createdAt,
+    /// city, phone — anything else falls back to name.
+    /// </param>
+    [HttpGet]
+    [RequirePermission(Permissions.Customers.View)]
+    [ProducesResponseType(typeof(PagedResult<CustomerListItemDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> GetCustomers(
+        [FromQuery] CustomerFilter filter,
+        CancellationToken cancellationToken)
     {
-        private readonly ICustomerQueries _customerQueries;
-        private readonly CustomerService _customerService;
-        public Customers(ICustomerQueries customerQueries, CustomerService customerService  )
-        {
-            _customerQueries = customerQueries;
-            _customerService = customerService;
-        }
+        PagedResult<CustomerListItemDto> result = await _customerQueries.SearchAsync(filter, cancellationToken);
 
-
-        /// <summary>
-        /// Retrieves detailed information about a specific customer along with the list of pets by their unique identifier.
-        /// </summary>
-        /// <param name="customerId"></param>
-        /// <param name="cancellationToken"></param>
-        /// <returns></returns>
-        [HttpGet("{customerId:guid}")]
-        [ProducesResponseType(typeof(CustomerDetailDto), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        public async Task<IActionResult> GetCustomerById([FromRoute] Guid customerId, CancellationToken cancellationToken)
-        {
-            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
-
-            if (customer is null)
-            {
-                return NotFound(new { message = $"Customer with ID '{customerId}' was not found." });
-            }
-
-            return Ok(customer);
-        }
-
-        /// <summary>
-        /// Retrieves a paginated list of customers matching optional search and filter criteria.
-        /// </summary>
-        /// <param name="filter">Filtering, sorting, and pagination parameters passed via query string.</param>
-        /// <param name="cancellationToken">Cancellation token for async execution.</param>
-        /// <returns>A paginated result set containing customer summary DTOs and pagination metadata.</returns>
-        [HttpGet]
-        [ProducesResponseType(typeof(PagedResult<CustomerDto>), StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<IActionResult> GetCustomers([FromQuery] CustomerFilter filter,CancellationToken cancellationToken)
-        {
-            PagedResult<CustomerDto> result = await _customerQueries.GetCustomersAsync(filter, cancellationToken);
-
-            return Ok(result);
-        }
-
-
-        /// <summary>
-        /// Searches Square for existing customers matching contact info to avoid duplicate accounts.
-        /// </summary>
-        [HttpPost("search-square")]
-        [ProducesResponseType(typeof(IEnumerable<SquareCustomerCandidateDto>), StatusCodes.Status200OK)]
-        public async Task<IActionResult> SearchSquareCustomers( [FromBody] SearchSquareCustomerRequest request,
-            CancellationToken cancellationToken)
-        {
-            var candidates = await _customerService.SearchSquareCustomersAsync(
-                request.Email,
-                request.PhoneNumber,
-                cancellationToken);
-
-            return Ok(candidates);
-        }
-
-
-        /// <summary>
-        /// Provisions a new customer in Square (if required) and creates the local database record.
-        /// </summary>
-        [HttpPost]
-        [ProducesResponseType(typeof(CustomerDto), StatusCodes.Status201Created)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        public async Task<IActionResult> CreateCustomer([FromBody] CreateCustomerRequest request,CancellationToken cancellationToken)
-        {
-            Address? address = null;
-            if (!string.IsNullOrWhiteSpace(request.Address) || !string.IsNullOrWhiteSpace(request.City))
-            {
-                address = new Address(request.Address ?? string.Empty,request.City ?? string.Empty,
-                    request.State ?? string.Empty,request.PostalCode ?? string.Empty);
-            }
-
-            var customerDto = new CustomerDto(
-                firstName: request.FirstName,
-                lastName: request.LastName,
-                email: request.Email,
-                phoneNumber: request.PhoneNumber,
-                notes: request.Notes,
-                address: address,
-                squareCustomerId: request.SquareCustomerId
-            );
-
-            Guid customerId = await _customerService.CreateCustomerAsync(customerDto, cancellationToken);
-
-            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(customerId, cancellationToken);
-
-            if (customer is null)
-            {
-                throw new NotFoundException($"Customer with ID '{customerId}' was not found after creation.");
-            }
-
-            return CreatedAtAction(nameof(GetCustomerById), new { customerId }, customer);
-        }
-
-
-        /// <summary>
-        /// Updates an existing customer's profile, syncing the change to Square when the account is linked.
-        /// </summary>
-        [HttpPut("edit-customer")]
-        [RequirePermission("customer:edit")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(StatusCodes.Status401Unauthorized)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
-        [ProducesResponseType(StatusCodes.Status404NotFound)]
-        public async Task<IActionResult> EditCustomer([FromBody] EditCustomerRequest request, CancellationToken cancellationToken)
-        {
-            Address? address = null;
-            if (!string.IsNullOrWhiteSpace(request.Address) || !string.IsNullOrWhiteSpace(request.City))
-            {
-                address = new Address(request.Address ?? string.Empty, request.City ?? string.Empty,
-                    request.State ?? string.Empty, request.PostalCode ?? string.Empty);
-            }
-
-            var customerDto = new CustomerDto(
-                firstName: request.FirstName,
-                lastName: request.LastName,
-                email: request.Email,
-                phoneNumber: request.PhoneNumber,
-                notes: request.Notes,
-                address: address,
-                squareCustomerId: request.SquareCustomerId
-            );
-
-            await _customerService.UpdateCustomerAsync(request.CustomerId, customerDto, cancellationToken);
-
-            CustomerDetailDto? customer = await _customerQueries.GetCustomerByIdAsync(request.CustomerId, cancellationToken);
-
-            if (customer is null)
-            {
-                throw new NotFoundException($"Customer with ID '{request.CustomerId}' was not found after update.");
-            }
-
-            return Ok(customer);
-        }
+        return Ok(result);
     }
+
+    /// <summary>
+    /// Returns one customer with their pets.
+    /// </summary>
+    [HttpGet("{customerId:guid}", Name = nameof(GetCustomerById))]
+    [RequirePermission(Permissions.Customers.View)]
+    [ProducesResponseType(typeof(CustomerDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCustomerById(
+        [FromRoute] Guid customerId,
+        CancellationToken cancellationToken)
+    {
+        CustomerDetailDto? customer = await _customerQueries.GetByIdAsync(customerId, cancellationToken);
+
+        if (customer is null)
+        {
+            return NotFound(new { message = $"Customer with ID '{customerId}' was not found." });
+        }
+
+        return Ok(customer);
+    }
+
+    /// <summary>
+    /// Looks a customer up by exact email address. Includes deactivated customers, so this
+    /// can be used as a duplicate check.
+    /// </summary>
+    [HttpGet("by-email")]
+    [RequirePermission(Permissions.Customers.View)]
+    [ProducesResponseType(typeof(CustomerDetailDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCustomerByEmail(
+        [FromQuery] string email,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return BadRequest(new { message = "An email address is required." });
+        }
+
+        CustomerDetailDto? customer = await _customerQueries.GetByEmailAsync(email, cancellationToken);
+
+        if (customer is null)
+        {
+            return NotFound(new { message = $"No customer found with the email '{email}'." });
+        }
+
+        return Ok(customer);
+    }
+
+    /// <summary>
+    /// Searches Square for existing profiles matching the contact details, so staff can
+    /// link an existing customer rather than create a duplicate.
+    /// </summary>
+    [HttpPost("search-square")]
+    [RequirePermission(Permissions.Customers.Create)]
+    [ProducesResponseType(typeof(IEnumerable<SquareCustomerCandidateDto>), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> SearchSquareCustomers(
+        [FromBody] SearchSquareCustomerRequest request,
+        CancellationToken cancellationToken)
+    {
+        var candidates = await _customerService.SearchSquareCustomersAsync(
+            request.Email, request.PhoneNumber, cancellationToken);
+
+        return Ok(candidates);
+    }
+
+    /// <summary>
+    /// Creates a customer and provisions or links their Square profile.
+    /// </summary>
+    /// <remarks>
+    /// The customer is saved locally first. If Square is unreachable the request still
+    /// succeeds and the response carries <c>squareSynced: false</c> — staff are not blocked
+    /// by an outage, and the link can be repaired from the sync endpoint.
+    /// </remarks>
+    [HttpPost]
+    [RequirePermission(Permissions.Customers.Create)]
+    [ProducesResponseType(typeof(CustomerWriteResponse), StatusCodes.Status201Created)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<IActionResult> CreateCustomer(
+        [FromBody] CreateCustomerRequest request,
+        CancellationToken cancellationToken)
+    {
+        CustomerWriteResult result = await _customerService.CreateCustomerAsync(
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.PhoneNumber,
+            request.Notes,
+            BuildAddress(request.Street, request.City, request.State, request.ZipCode),
+            request.SquareCustomerId,
+            cancellationToken);
+
+        return CreatedAtRoute(
+            nameof(GetCustomerById),
+            new { customerId = result.CustomerId },
+            ToResponse(result));
+    }
+
+    /// <summary>
+    /// Updates a customer and pushes the change to Square when they are linked.
+    /// </summary>
+    [HttpPut("{customerId:guid}")]
+    [RequirePermission(Permissions.Customers.Edit)]
+    [ProducesResponseType(typeof(CustomerWriteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateCustomer(
+        [FromRoute] Guid customerId,
+        [FromBody] UpdateCustomerRequest request,
+        CancellationToken cancellationToken)
+    {
+        CustomerWriteResult result = await _customerService.UpdateCustomerAsync(
+            customerId,
+            request.FirstName,
+            request.LastName,
+            request.Email,
+            request.PhoneNumber,
+            request.Notes,
+            BuildAddress(request.Street, request.City, request.State, request.ZipCode),
+            cancellationToken);
+
+        return Ok(ToResponse(result));
+    }
+
+    /// <summary>
+    /// Deactivates a customer. This is a soft delete — their delivery history is retained
+    /// and they can be reactivated.
+    /// </summary>
+    [HttpDelete("{customerId:guid}")]
+    [RequirePermission(Permissions.Customers.Delete)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeactivateCustomer(
+        [FromRoute] Guid customerId,
+        CancellationToken cancellationToken)
+    {
+        await _customerService.DeactivateCustomerAsync(customerId, cancellationToken);
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Reactivates a previously deactivated customer.
+    /// </summary>
+    [HttpPost("{customerId:guid}/reactivate")]
+    [RequirePermission(Permissions.Customers.Edit)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> ReactivateCustomer(
+        [FromRoute] Guid customerId,
+        CancellationToken cancellationToken)
+    {
+        await _customerService.ReactivateCustomerAsync(customerId, cancellationToken);
+
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Retries the Square link for a customer whose earlier sync failed, or re-pushes the
+    /// current details for one that is already linked.
+    /// </summary>
+    /// <remarks>
+    /// Unlike create and update, this endpoint exists to do the Square work, so a Square
+    /// failure here surfaces as an error rather than being swallowed.
+    /// </remarks>
+    [HttpPost("{customerId:guid}/sync-square")]
+    [RequirePermission(Permissions.Customers.Edit)]
+    [ProducesResponseType(typeof(CustomerWriteResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> SyncCustomerToSquare(
+        [FromRoute] Guid customerId,
+        CancellationToken cancellationToken)
+    {
+        CustomerWriteResult result = await _customerService.SyncToSquareAsync(customerId, cancellationToken);
+
+        return Ok(ToResponse(result));
+    }
+
+    /// <summary>
+    /// Builds the Address value object, or null when no address fields were supplied.
+    /// </summary>
+    private static Address? BuildAddress(string? street, string? city, string? state, string? zipCode)
+    {
+        if (string.IsNullOrWhiteSpace(street)
+            && string.IsNullOrWhiteSpace(city)
+            && string.IsNullOrWhiteSpace(state)
+            && string.IsNullOrWhiteSpace(zipCode))
+        {
+            return null;
+        }
+
+        return new Address(
+            street ?? string.Empty,
+            city ?? string.Empty,
+            state ?? string.Empty,
+            zipCode ?? string.Empty);
+    }
+
+    private static CustomerWriteResponse ToResponse(CustomerWriteResult result) => new()
+    {
+        CustomerId = result.CustomerId,
+        SquareSynced = result.SquareSynced,
+        SquareError = result.SquareError
+    };
 }

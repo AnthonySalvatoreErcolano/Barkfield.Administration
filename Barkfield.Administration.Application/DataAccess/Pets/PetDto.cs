@@ -1,21 +1,22 @@
-﻿using Barkfield.Administration.Domain.ValueObjects;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Barkfield.Administration.Domain.ValueObjects;
 
-namespace Barkfield.Administration.Application.DataAccess.Pets
+namespace Barkfield.Administration.Application.DataAccess.Pets;
+
+/// <summary>
+/// A pet as shown on a customer's page. Public setters because Dapper populates this.
+/// </summary>
+public class PetDto
 {
-    public class PetDto
-    {
-        public Guid Id { get; private set; }
-        public Guid CustomerId { get; private set; }
-        public string Name { get; private set; } = string.Empty;
-        public DateTime? Birthday { get; private set; }
-        public PetType PetType { get; private set; }
-        public string? Breed { get; private set; }
-        public string? Notes { get; private set; }
-        public string? PictureUrl { get; private set; }
-        public DateTime CreatedAt { get; private set; }
-        public DateTime? UpdatedAt { get; private set; }
-    }
+    public Guid Id { get; set; }
+    public Guid CustomerId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public DateTime? Birthday { get; set; }
+    public PetType PetType { get; set; }
+    public string? Breed { get; set; }
+    public string? Notes { get; set; }
+    public string? PictureUrl { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+
+    public string PetTypeName => PetType.ToString();
 }

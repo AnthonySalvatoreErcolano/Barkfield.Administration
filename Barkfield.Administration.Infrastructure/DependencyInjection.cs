@@ -70,13 +70,14 @@ namespace Barkfield.Administration.Infrastructure
         private static void AddDataAccess(this IServiceCollection services)
         {
             services.AddScoped<ICustomerQueries, CustomerQueries>();
+            services.AddScoped<ICustomerCommands, CustomerCommands>();
             services.AddScoped<IUserQueries, UserQueries>();
             services.AddScoped<IRefreshTokenQueries, RefreshTokenQueries>();
             services.AddScoped<IRefreshTokenCommands, RefreshTokenCommands>();
 
-            // TODO(chunk 2/3): ICustomerCommands, IUserCommands, IUserRoleCommands and
-            // IUserRoleQueries have no implementations yet. Until they exist, resolving
-            // CustomerService / UserService / IIdentityService will fail at startup.
+            // TODO: IUserCommands, IUserRoleCommands and IUserRoleQueries have no
+            // implementations yet, so resolving UserService and IIdentityService still
+            // fails at startup. The customer slice is complete.
         }
         private static void ConfigureSquare(this IServiceCollection services, IConfiguration configuration)
         {
