@@ -3,18 +3,12 @@ using Barkfield.Administration.Domain.Shared.Exceptions;
 namespace Barkfield.Administration.Domain.Entities;
 
 /// <summary>
-/// One delivery's place on a route, with its loading and arrival telemetry.
+/// One delivery's place on a route, as Routific ordered it, plus our own loading tick.
 /// </summary>
 /// <remarks>
-/// <para>
 /// Carries no delivery outcome. Whether a delivery succeeded or failed lives on
 /// <see cref="Delivery"/>, so the two can never disagree — the same rule that keeps
 /// procurement status off <see cref="SubscriptionItem"/>.
-/// </para>
-/// <para>
-/// <see cref="SequenceOrder"/> is always assigned by the optimiser. Staff choose which route a
-/// delivery is on; they never hand-order the stops.
-/// </para>
 /// </remarks>
 public class RouteStop
 {
@@ -22,17 +16,21 @@ public class RouteStop
     public Guid RouteId { get; private set; }
     public Guid DeliveryId { get; private set; }
 
-    /// <summary>1-based position in the run. Zero until the route has been optimised.</summary>
+    /// <summary>Position in the run, as sequenced by Routific.</summary>
     public int SequenceOrder { get; private set; }
 
-    public TimeOnly? EstimatedArrival { get; private set; }
-    public TimeOnly? EstimatedDeparture { get; private set; }
+    /// <summary>Routific's stop identifier, for correlating later updates.</summary>
+    public string? ExternalStopId { get; private set; }
 
-    /// <summary>Set when staff tick the box into the van.</summary>
+    public TimeOnly? PlannedArrival { get; private set; }
+    public TimeOnly? PlannedDeparture { get; private set; }
+    public TimeOnly? ActualArrival { get; private set; }
+    public TimeOnly? ActualDeparture { get; private set; }
+
+    public double? DistanceFromPreviousKm { get; private set; }
+
+    /// <summary>Set when staff tick this delivery into the van.</summary>
     public DateTime? LoadedAt { get; private set; }
-
-    /// <summary>Set by the driver app on arrival.</summary>
-    public DateTime? ArrivedAt { get; private set; }
 
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
@@ -41,20 +39,26 @@ public class RouteStop
 
     private RouteStop() { }
 
-    internal static RouteStop Create(Guid routeId, Guid deliveryId)
+    internal static RouteStop FromPublished(Guid routeId, PublishedStopData data)
     {
         if (routeId == Guid.Empty)
             throw new DomainException("A route stop must belong to a valid route.");
 
-        if (deliveryId == Guid.Empty)
+        if (data.DeliveryId == Guid.Empty)
             throw new DomainException("A route stop must reference a valid delivery.");
 
         return new RouteStop
         {
             Id = Guid.NewGuid(),
             RouteId = routeId,
-            DeliveryId = deliveryId,
-            SequenceOrder = 0,
+            DeliveryId = data.DeliveryId,
+            SequenceOrder = data.Sequence,
+            ExternalStopId = data.ExternalStopId,
+            PlannedArrival = data.PlannedArrival,
+            PlannedDeparture = data.PlannedDeparture,
+            ActualArrival = data.ActualArrival,
+            ActualDeparture = data.ActualDeparture,
+            DistanceFromPreviousKm = data.DistanceFromPreviousKm,
             CreatedAt = DateTime.UtcNow
         };
     }
@@ -64,10 +68,13 @@ public class RouteStop
         Guid routeId,
         Guid deliveryId,
         int sequenceOrder,
-        TimeOnly? estimatedArrival,
-        TimeOnly? estimatedDeparture,
+        string? externalStopId,
+        TimeOnly? plannedArrival,
+        TimeOnly? plannedDeparture,
+        TimeOnly? actualArrival,
+        TimeOnly? actualDeparture,
+        double? distanceFromPreviousKm,
         DateTime? loadedAt,
-        DateTime? arrivedAt,
         DateTime createdAt,
         DateTime? updatedAt)
     {
@@ -80,20 +87,31 @@ public class RouteStop
             RouteId = routeId,
             DeliveryId = deliveryId,
             SequenceOrder = sequenceOrder,
-            EstimatedArrival = estimatedArrival,
-            EstimatedDeparture = estimatedDeparture,
+            ExternalStopId = externalStopId,
+            PlannedArrival = plannedArrival,
+            PlannedDeparture = plannedDeparture,
+            ActualArrival = actualArrival,
+            ActualDeparture = actualDeparture,
+            DistanceFromPreviousKm = distanceFromPreviousKm,
             LoadedAt = loadedAt,
-            ArrivedAt = arrivedAt,
             CreatedAt = createdAt,
             UpdatedAt = updatedAt
         };
     }
 
-    internal void ApplyOptimization(int sequenceOrder, TimeOnly? estimatedArrival, TimeOnly? estimatedDeparture)
+    /// <summary>
+    /// Re-applies this stop's details when Routific republishes the route. The loading tick
+    /// is preserved — staff having already put the box in the van is our fact, not Routific's.
+    /// </summary>
+    internal void ApplyPublished(PublishedStopData data)
     {
-        SequenceOrder = sequenceOrder;
-        EstimatedArrival = estimatedArrival;
-        EstimatedDeparture = estimatedDeparture;
+        SequenceOrder = data.Sequence;
+        ExternalStopId = data.ExternalStopId ?? ExternalStopId;
+        PlannedArrival = data.PlannedArrival;
+        PlannedDeparture = data.PlannedDeparture;
+        ActualArrival = data.ActualArrival ?? ActualArrival;
+        ActualDeparture = data.ActualDeparture ?? ActualDeparture;
+        DistanceFromPreviousKm = data.DistanceFromPreviousKm;
         Touch();
     }
 
@@ -109,14 +127,18 @@ public class RouteStop
         Touch();
     }
 
-    /// <summary>
-    /// Records arrival. Idempotent — the driver app replays queued actions after signal loss.
-    /// </summary>
-    internal void RecordArrival(DateTime arrivedAt)
-    {
-        ArrivedAt ??= arrivedAt;
-        Touch();
-    }
-
     private void Touch() => UpdatedAt = DateTime.UtcNow;
 }
+
+/// <summary>
+/// Internal carrier for the stop fields a published route supplies.
+/// </summary>
+internal readonly record struct PublishedStopData(
+    Guid DeliveryId,
+    int Sequence,
+    string? ExternalStopId,
+    TimeOnly? PlannedArrival,
+    TimeOnly? PlannedDeparture,
+    TimeOnly? ActualArrival,
+    TimeOnly? ActualDeparture,
+    double? DistanceFromPreviousKm);

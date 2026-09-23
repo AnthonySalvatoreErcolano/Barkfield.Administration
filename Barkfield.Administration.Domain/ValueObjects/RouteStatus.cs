@@ -1,25 +1,26 @@
 namespace Barkfield.Administration.Domain.ValueObjects;
 
 /// <summary>
-/// Lifecycle of a delivery route.
+/// Lifecycle of a delivery route, mirroring the states Routific reports.
 /// </summary>
+/// <remarks>
+/// Phase 1 routes are built in Routific and arrive here already published, so this
+/// tracks an external lifecycle rather than one this system drives.
+/// </remarks>
 public enum RouteStatus
 {
-    /// <summary>Staff are still assigning deliveries. Stop order is not meaningful yet.</summary>
-    Draft = 1,
+    /// <summary>Built in Routific but not yet released to a driver.</summary>
+    Planned = 1,
 
-    /// <summary>The optimiser has ordered the stops. Still editable.</summary>
-    Optimized = 2,
+    /// <summary>Released to the driver. This is the state routes normally reach us in.</summary>
+    Published = 2,
 
-    /// <summary>Released to the driver app. Still editable, but changes need re-publishing.</summary>
-    Published = 3,
-
-    /// <summary>The driver has started the run.</summary>
-    InProgress = 4,
+    /// <summary>The driver is working the route.</summary>
+    Executing = 3,
 
     /// <summary>Every stop has been attempted.</summary>
-    Completed = 5,
+    Completed = 4,
 
     /// <summary>Called off before it ran.</summary>
-    Canceled = 6
+    Canceled = 5
 }

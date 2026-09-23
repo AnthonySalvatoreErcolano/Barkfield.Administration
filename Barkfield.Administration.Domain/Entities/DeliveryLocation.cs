@@ -4,18 +4,23 @@ using Barkfield.Administration.Domain.ValueObjects;
 namespace Barkfield.Administration.Domain.Entities;
 
 /// <summary>
-/// A place a customer receives deliveries: the address, its geocoded coordinates, and the
-/// driver-facing detail that makes the stop work.
+/// A place a customer receives deliveries: the address, the driver-facing detail that makes
+/// the stop work, and how long it takes.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Separate from <see cref="Customer.Address"/> because routing needs coordinates, drivers need
-/// access notes, a customer may have more than one address, and the optimiser needs a service
-/// duration per stop — none of which an address value object carries.
+/// Separate from <see cref="Customer.Address"/> because a customer may have more than one
+/// delivery address, drivers need access notes, and the route planner needs a service duration
+/// and a delivery window per stop.
 /// </para>
 /// <para>
-/// A location cannot be routed until it has been geocoded. <see cref="Precision"/> is kept so
-/// staff can spot a low-confidence result and correct it by hand.
+/// Every field here maps onto an order pushed to the routing provider: address, phone,
+/// <c>instructions</c>, <c>duration</c> and <c>timeWindows</c>.
+/// </para>
+/// <para>
+/// Coordinates are optional. Routific geocodes from the address string, so nothing here blocks
+/// on having them — they are stored when a provider hands them back, and become required only
+/// if routing is brought in-house.
 /// </para>
 /// </remarks>
 public class DeliveryLocation
@@ -31,16 +36,13 @@ public class DeliveryLocation
 
     public Address Address { get; private set; } = null!;
 
-    /// <summary>Null until geocoded. Required before this location can go on a route.</summary>
+    /// <summary>Set when a routing provider returns coordinates for this address. Not required.</summary>
     public GeoPoint? Coordinates { get; private set; }
-
-    public GeocodePrecision? Precision { get; private set; }
-    public DateTime? GeocodedAt { get; private set; }
 
     /// <summary>Driver-facing instructions — gate codes, "leave at side door", "dog in yard".</summary>
     public string? AccessNotes { get; private set; }
 
-    /// <summary>How long the stop takes. Feeds the optimiser's per-visit duration.</summary>
+    /// <summary>How long the stop takes. Sent as the order's service duration.</summary>
     public int ServiceDurationMinutes { get; private set; }
 
     /// <summary>Customer's preferred delivery window, if any.</summary>
@@ -51,13 +53,6 @@ public class DeliveryLocation
 
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
-
-    /// <summary>True when this location has everything the optimiser needs.</summary>
-    public bool IsRoutable => IsActive && Coordinates is not null;
-
-    /// <summary>True when the geocode resolved poorly enough that staff should check it.</summary>
-    public bool NeedsGeocodeReview =>
-        Precision is null or GeocodePrecision.Approximate or GeocodePrecision.Failed;
 
     private DeliveryLocation() { }
 
@@ -99,8 +94,6 @@ public class DeliveryLocation
         string label,
         Address address,
         GeoPoint? coordinates,
-        GeocodePrecision? precision,
-        DateTime? geocodedAt,
         string? accessNotes,
         int serviceDurationMinutes,
         TimeWindow? preferredWindow,
@@ -119,8 +112,6 @@ public class DeliveryLocation
             Label = label,
             Address = address,
             Coordinates = coordinates,
-            Precision = precision,
-            GeocodedAt = geocodedAt,
             AccessNotes = accessNotes,
             ServiceDurationMinutes = serviceDurationMinutes,
             PreferredWindow = preferredWindow,
@@ -132,45 +123,18 @@ public class DeliveryLocation
     }
 
     /// <summary>
-    /// Records the result of geocoding this address.
+    /// Records coordinates handed back by a routing provider.
     /// </summary>
-    public void SetCoordinates(GeoPoint coordinates, GeocodePrecision precision)
+    public void SetCoordinates(GeoPoint coordinates)
     {
         ArgumentNullException.ThrowIfNull(coordinates);
 
         Coordinates = coordinates;
-        Precision = precision;
-        GeocodedAt = DateTime.UtcNow;
         Touch();
     }
 
     /// <summary>
-    /// Records that geocoding failed, leaving the location unroutable until a human intervenes.
-    /// </summary>
-    public void MarkGeocodeFailed()
-    {
-        Coordinates = null;
-        Precision = GeocodePrecision.Failed;
-        GeocodedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    /// <summary>
-    /// Places the pin by hand, overriding whatever the geocoder produced.
-    /// </summary>
-    public void SetCoordinatesManually(GeoPoint coordinates)
-    {
-        ArgumentNullException.ThrowIfNull(coordinates);
-
-        Coordinates = coordinates;
-        Precision = GeocodePrecision.Manual;
-        GeocodedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    /// <summary>
-    /// Changes the address. Coordinates are cleared, because they now describe the old one —
-    /// the caller must re-geocode before this location can be routed again.
+    /// Changes the address. Coordinates are cleared, because they describe the old one.
     /// </summary>
     public void UpdateAddress(Address address)
     {
@@ -178,8 +142,6 @@ public class DeliveryLocation
 
         Address = address;
         Coordinates = null;
-        Precision = null;
-        GeocodedAt = null;
         Touch();
     }
 

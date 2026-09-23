@@ -4,28 +4,22 @@ using Barkfield.Administration.Domain.ValueObjects;
 namespace Barkfield.Administration.Domain.Entities;
 
 /// <summary>
-/// A day's run for one van: the deliveries assigned to it, in the order the optimiser worked out.
+/// A day's run as Routific planned it: the deliveries on it, in the order the driver works them.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Staff own the split, the optimiser owns the sequence.</b> Staff create however many routes
-/// a day needs and assign deliveries between them; there is deliberately no method to hand-order
-/// stops. <see cref="SequenceOrder"/> always comes from <see cref="ApplyOptimizedOrder"/>.
+/// <b>This system does not build routes.</b> Staff send the day's orders to Routific, do the
+/// route building there, and publish. Routific then reports the finished route back and we
+/// materialise it here — so every route originates from <see cref="FromPublished"/>, never from
+/// a constructor staff drive.
 /// </para>
 /// <para>
-/// Because each route is solved independently, the optimisation problem is a single-vehicle
-/// travelling-salesman with a fixed depot at both ends — not a fleet assignment problem.
+/// What we add on top is the loading workflow: <see cref="StopsInLoadingOrder"/> and the
+/// per-stop tick that makes sure the van is packed correctly and nothing is left behind.
 /// </para>
 /// <para>
-/// Assigning or unassigning a delivery stamps <see cref="StopsChangedAt"/>, which makes
-/// <see cref="NeedsOptimization"/> true and blocks publishing until the route is re-optimised.
-/// </para>
-/// <para>
-/// A route cannot be published without a driver. Publishing is what releases it to the driver
-/// app: the caller pushes a notification to the driver's devices and calls
-/// <see cref="MarkDriverNotified"/>; the driver opening it calls <see cref="AcknowledgeByDriver"/>.
-/// Drivers are ordinary <see cref="User"/>s holding the driver role, so they authenticate through
-/// the existing identity system rather than a parallel one.
+/// Routific republishes routes when a dispatcher changes one, so
+/// <see cref="ApplyPublished"/> must be safe to run repeatedly over the same route.
 /// </para>
 /// </remarks>
 public class Route
@@ -34,130 +28,101 @@ public class Route
 
     public Guid Id { get; private set; }
 
-    /// <summary>The delivery day this route runs on.</summary>
+    /// <summary>Routific's route identifier. The correlation key for republishes.</summary>
+    public string ExternalRouteId { get; private set; } = string.Empty;
+
     public DateTime ScheduledDate { get; private set; }
-
-    /// <summary>Staff-facing label, e.g. "Route 1" or "North Shore".</summary>
     public string Name { get; private set; } = string.Empty;
-
-    /// <summary>Where the run starts and ends.</summary>
-    public Guid DepotId { get; private set; }
-
-    /// <summary>
-    /// The driver running this route. A staff <see cref="User"/> holding the driver role —
-    /// drivers authenticate through the same identity system as everyone else.
-    /// </summary>
-    public Guid? AssignedDriverUserId { get; private set; }
-
     public RouteStatus Status { get; private set; }
 
-    /// <summary>When the van is planned to leave the depot. Anchors the estimated arrival times.</summary>
-    public TimeOnly PlannedStartTime { get; private set; }
+    /// <summary>Driver as named by Routific. Not a local user — drivers live in Routific in Phase 1.</summary>
+    public string? DriverName { get; private set; }
+    public string? DriverEmail { get; private set; }
 
-    /// <summary>Optional end of the driver's shift, so the optimiser can avoid overrunning it.</summary>
-    public TimeOnly? PlannedEndTime { get; private set; }
+    public int? WorkingTimeSeconds { get; private set; }
+    public double? DistanceKilometers { get; private set; }
 
-    /// <summary>Set once the driver's device has been told the route is ready.</summary>
-    public DateTime? DriverNotifiedAt { get; private set; }
+    /// <summary>When Routific published it.</summary>
+    public DateTime PublishedAt { get; private set; }
 
-    /// <summary>Set when the driver opens the route in the app. Staff can see who has not picked up yet.</summary>
-    public DateTime? DriverAcknowledgedAt { get; private set; }
+    /// <summary>When we received it. Distinct from <see cref="PublishedAt"/> if a webhook was retried.</summary>
+    public DateTime ReceivedAt { get; private set; }
 
-    public DateTime? OptimizedAt { get; private set; }
-    public DateTime? StopsChangedAt { get; private set; }
-
-    /// <summary>Which travel-time data produced the current ordering.</summary>
-    public RouteOptimizationSource? OptimizationSource { get; private set; }
-
-    public int? EstimatedTravelSeconds { get; private set; }
-    public int? EstimatedTotalSeconds { get; private set; }
-
-    public DateTime? PublishedAt { get; private set; }
-    public DateTime? StartedAt { get; private set; }
-    public DateTime? CompletedAt { get; private set; }
-
-    public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
 
-    /// <summary>Stops in run order. Unordered until the route has been optimised.</summary>
+    /// <summary>Stops in the order the driver drives them.</summary>
     public IReadOnlyList<RouteStop> Stops =>
-        _stops.OrderBy(s => s.SequenceOrder).ThenBy(s => s.CreatedAt).ToList();
+        _stops.OrderBy(s => s.SequenceOrder).ToList();
+
+    /// <summary>
+    /// Stops in the order they should go into the van — the reverse of the driving order, so the
+    /// first delivery ends up nearest the doors.
+    /// </summary>
+    public IReadOnlyList<RouteStop> StopsInLoadingOrder =>
+        _stops.OrderByDescending(s => s.SequenceOrder).ToList();
 
     public int StopCount => _stops.Count;
 
-    /// <summary>True when the stop list has changed since the last optimisation.</summary>
-    public bool NeedsOptimization =>
-        _stops.Count > 0 && (OptimizedAt is null || (StopsChangedAt is not null && StopsChangedAt > OptimizedAt));
-
-    /// <summary>True when the ordering came from the straight-line fallback rather than real roads.</summary>
-    public bool HasApproximateOrdering => OptimizationSource == RouteOptimizationSource.Approximate;
-
-    public bool IsClosed => Status is RouteStatus.Completed or RouteStatus.Canceled;
-
-    public bool HasDriver => AssignedDriverUserId is not null;
-
-    /// <summary>Published to a driver who has not opened it yet. Worth surfacing before the van should leave.</summary>
-    public bool IsAwaitingDriverAcknowledgement =>
-        Status == RouteStatus.Published && DriverAcknowledgedAt is null;
-
-    /// <summary>Stops still waiting to be ticked into the van.</summary>
     public IReadOnlyCollection<RouteStop> UnloadedStops => _stops.Where(s => !s.IsLoaded).ToList();
 
     public bool IsFullyLoaded => _stops.Count > 0 && _stops.All(s => s.IsLoaded);
 
+    public bool IsClosed => Status is RouteStatus.Completed or RouteStatus.Canceled;
+
     private Route() { }
 
-    public static Route Create(
+    /// <summary>
+    /// Materialises a route from a Routific publication.
+    /// </summary>
+    public static Route FromPublished(
+        string externalRouteId,
         DateTime scheduledDate,
         string name,
-        Guid depotId,
-        TimeOnly plannedStartTime,
-        TimeOnly? plannedEndTime = null,
-        Guid? assignedDriverUserId = null)
+        RouteStatus status,
+        DateTime publishedAt,
+        IReadOnlyCollection<PublishedRouteStop> stops,
+        string? driverName = null,
+        string? driverEmail = null,
+        int? workingTimeSeconds = null,
+        double? distanceKilometers = null)
     {
-        if (string.IsNullOrWhiteSpace(name))
-            throw new DomainException("Route name is required.");
+        if (string.IsNullOrWhiteSpace(externalRouteId))
+            throw new DomainException("A published route must carry its external route identifier.");
 
-        if (depotId == Guid.Empty)
-            throw new DomainException("A route must start and end at a valid depot.");
+        ArgumentNullException.ThrowIfNull(stops);
 
-        if (plannedEndTime.HasValue && plannedEndTime.Value <= plannedStartTime)
-            throw new DomainException("A route's shift must end after it starts.");
-
-        return new Route
+        var route = new Route
         {
             Id = Guid.NewGuid(),
+            ExternalRouteId = externalRouteId.Trim(),
             ScheduledDate = scheduledDate.Date,
-            Name = name.Trim(),
-            DepotId = depotId,
-            PlannedStartTime = plannedStartTime,
-            PlannedEndTime = plannedEndTime,
-            AssignedDriverUserId = assignedDriverUserId,
-            Status = RouteStatus.Draft,
-            CreatedAt = DateTime.UtcNow
+            Name = string.IsNullOrWhiteSpace(name) ? externalRouteId.Trim() : name.Trim(),
+            Status = status,
+            PublishedAt = publishedAt,
+            ReceivedAt = DateTime.UtcNow,
+            DriverName = driverName?.Trim(),
+            DriverEmail = driverEmail?.Trim(),
+            WorkingTimeSeconds = workingTimeSeconds,
+            DistanceKilometers = distanceKilometers
         };
+
+        route.ReplaceStops(stops);
+
+        return route;
     }
 
     public static Route FromDto(
         Guid id,
+        string externalRouteId,
         DateTime scheduledDate,
         string name,
-        Guid depotId,
-        Guid? assignedDriverUserId,
         RouteStatus status,
-        TimeOnly plannedStartTime,
-        TimeOnly? plannedEndTime,
-        DateTime? driverNotifiedAt,
-        DateTime? driverAcknowledgedAt,
-        DateTime? optimizedAt,
-        DateTime? stopsChangedAt,
-        RouteOptimizationSource? optimizationSource,
-        int? estimatedTravelSeconds,
-        int? estimatedTotalSeconds,
-        DateTime? publishedAt,
-        DateTime? startedAt,
-        DateTime? completedAt,
-        DateTime createdAt,
+        string? driverName,
+        string? driverEmail,
+        int? workingTimeSeconds,
+        double? distanceKilometers,
+        DateTime publishedAt,
+        DateTime receivedAt,
         DateTime? updatedAt,
         IEnumerable<RouteStop>? stops = null)
     {
@@ -167,24 +132,16 @@ public class Route
         var route = new Route
         {
             Id = id,
+            ExternalRouteId = externalRouteId,
             ScheduledDate = scheduledDate,
             Name = name,
-            DepotId = depotId,
-            AssignedDriverUserId = assignedDriverUserId,
             Status = status,
-            PlannedStartTime = plannedStartTime,
-            PlannedEndTime = plannedEndTime,
-            DriverNotifiedAt = driverNotifiedAt,
-            DriverAcknowledgedAt = driverAcknowledgedAt,
-            OptimizedAt = optimizedAt,
-            StopsChangedAt = stopsChangedAt,
-            OptimizationSource = optimizationSource,
-            EstimatedTravelSeconds = estimatedTravelSeconds,
-            EstimatedTotalSeconds = estimatedTotalSeconds,
+            DriverName = driverName,
+            DriverEmail = driverEmail,
+            WorkingTimeSeconds = workingTimeSeconds,
+            DistanceKilometers = distanceKilometers,
             PublishedAt = publishedAt,
-            StartedAt = startedAt,
-            CompletedAt = completedAt,
-            CreatedAt = createdAt,
+            ReceivedAt = receivedAt,
             UpdatedAt = updatedAt
         };
 
@@ -196,300 +153,111 @@ public class Route
         return route;
     }
 
-    // --- Assignment --------------------------------------------------------
-
     /// <summary>
-    /// Puts a delivery on this route. Order is not decided here — the route now needs optimising.
+    /// Re-applies a republication from Routific. Stops that survive keep their identity and their
+    /// loading tick; stops no longer on the route are dropped and new ones added.
     /// </summary>
-    public RouteStop AssignDelivery(Guid deliveryId)
+    public void ApplyPublished(
+        DateTime scheduledDate,
+        string name,
+        RouteStatus status,
+        DateTime publishedAt,
+        IReadOnlyCollection<PublishedRouteStop> stops,
+        string? driverName = null,
+        string? driverEmail = null,
+        int? workingTimeSeconds = null,
+        double? distanceKilometers = null)
     {
-        EnsureEditable();
+        ArgumentNullException.ThrowIfNull(stops);
 
-        if (deliveryId == Guid.Empty)
-            throw new DomainException("A valid delivery id is required.");
+        ScheduledDate = scheduledDate.Date;
+        Name = string.IsNullOrWhiteSpace(name) ? Name : name.Trim();
+        Status = status;
+        PublishedAt = publishedAt;
+        DriverName = driverName?.Trim() ?? DriverName;
+        DriverEmail = driverEmail?.Trim() ?? DriverEmail;
+        WorkingTimeSeconds = workingTimeSeconds ?? WorkingTimeSeconds;
+        DistanceKilometers = distanceKilometers ?? DistanceKilometers;
 
-        if (_stops.Any(s => s.DeliveryId == deliveryId))
-            throw new DomainException("That delivery is already on this route.");
-
-        var stop = RouteStop.Create(Id, deliveryId);
-        _stops.Add(stop);
-
-        MarkStopsChanged();
-
-        return stop;
+        ReplaceStops(stops);
+        Touch();
     }
 
     /// <summary>
-    /// Takes a delivery off this route, returning it to the unassigned pool.
+    /// Applies a status change reported by Routific without touching the stops.
     /// </summary>
-    public void UnassignDelivery(Guid deliveryId)
+    public bool ApplyStatus(RouteStatus status)
     {
-        EnsureEditable();
+        if (Status == status) return false;
 
-        if (_stops.RemoveAll(s => s.DeliveryId == deliveryId) > 0)
-        {
-            MarkStopsChanged();
-        }
+        Status = status;
+        Touch();
+        return true;
     }
 
     public bool Contains(Guid deliveryId) => _stops.Any(s => s.DeliveryId == deliveryId);
-
-    // --- Optimisation ------------------------------------------------------
-
-    /// <summary>
-    /// Applies an optimiser's answer: the run order and estimated arrival times.
-    /// </summary>
-    /// <param name="orderedStops">
-    /// Every delivery currently on this route, exactly once, in run order.
-    /// </param>
-    /// <param name="source">
-    /// Whether real road travel times or the straight-line fallback produced this ordering.
-    /// </param>
-    /// <remarks>
-    /// Takes plain values, never vendor types, so the domain stays ignorant of which engine ran.
-    /// </remarks>
-    public void ApplyOptimizedOrder(
-        IReadOnlyList<OptimizedStop> orderedStops,
-        RouteOptimizationSource source,
-        int? estimatedTravelSeconds = null,
-        int? estimatedTotalSeconds = null)
-    {
-        EnsureEditable();
-        ArgumentNullException.ThrowIfNull(orderedStops);
-
-        if (_stops.Count == 0)
-            throw new DomainException("There is nothing to optimise on an empty route.");
-
-        var suppliedIds = orderedStops.Select(s => s.DeliveryId).ToList();
-
-        if (suppliedIds.Count != _stops.Count
-            || suppliedIds.Distinct().Count() != suppliedIds.Count
-            || suppliedIds.Any(id => _stops.All(s => s.DeliveryId != id)))
-        {
-            throw new DomainException("An optimised order must list every delivery on this route exactly once.");
-        }
-
-        for (int i = 0; i < orderedStops.Count; i++)
-        {
-            OptimizedStop optimized = orderedStops[i];
-            RouteStop stop = _stops.First(s => s.DeliveryId == optimized.DeliveryId);
-
-            stop.ApplyOptimization(i + 1, optimized.EstimatedArrival, optimized.EstimatedDeparture);
-        }
-
-        OptimizedAt = DateTime.UtcNow;
-        OptimizationSource = source;
-        EstimatedTravelSeconds = estimatedTravelSeconds;
-        EstimatedTotalSeconds = estimatedTotalSeconds;
-
-        if (Status == RouteStatus.Draft)
-        {
-            Status = RouteStatus.Optimized;
-        }
-
-        Touch();
-    }
 
     // --- Loading -----------------------------------------------------------
 
     public void MarkStopLoaded(Guid routeStopId)
     {
-        EnsureOpen();
         FindStop(routeStopId).MarkLoaded();
         Touch();
     }
 
     public void ClearStopLoaded(Guid routeStopId)
     {
-        EnsureOpen();
         FindStop(routeStopId).ClearLoaded();
         Touch();
     }
 
-    /// <summary>
-    /// Records the driver arriving at a stop. Idempotent, because the driver app replays queued
-    /// actions after losing signal.
-    /// </summary>
-    public void RecordStopArrival(Guid routeStopId, DateTime arrivedAt)
-    {
-        FindStop(routeStopId).RecordArrival(arrivedAt);
-        Touch();
-    }
-
-    // --- Lifecycle ---------------------------------------------------------
-
-    /// <summary>
-    /// Releases the route to the driver app. The caller is expected to push a notification to the
-    /// assigned driver's devices and then call <see cref="MarkDriverNotified"/>.
-    /// </summary>
-    public void Publish()
-    {
-        EnsureEditable();
-
-        if (_stops.Count == 0)
-            throw new DomainException("An empty route cannot be published.");
-
-        if (!HasDriver)
-            throw new DomainException("A route cannot be published without an assigned driver.");
-
-        if (NeedsOptimization)
-            throw new DomainException("This route has changed since it was last optimised. Re-optimise before publishing.");
-
-        Status = RouteStatus.Published;
-        PublishedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    /// <summary>
-    /// Records that the push notification went out to the driver's devices.
-    /// </summary>
-    public void MarkDriverNotified()
-    {
-        if (Status != RouteStatus.Published)
-            throw new DomainException("Only a published route can be sent to a driver.");
-
-        DriverNotifiedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    /// <summary>
-    /// Records the driver opening the route in the app.
-    /// </summary>
-    /// <returns>True if this changed anything; false if already acknowledged.</returns>
-    /// <remarks>
-    /// Idempotent — the driver app replays queued actions after signal loss, so a repeat must be
-    /// a no-op rather than an error.
-    /// </remarks>
-    public bool AcknowledgeByDriver()
-    {
-        if (Status != RouteStatus.Published) return false;
-        if (DriverAcknowledgedAt is not null) return false;
-
-        DriverAcknowledgedAt = DateTime.UtcNow;
-        Touch();
-        return true;
-    }
-
-    public void Start()
-    {
-        if (Status != RouteStatus.Published)
-            throw new DomainException($"A route in '{Status}' cannot be started; it must be published first.");
-
-        Status = RouteStatus.InProgress;
-        StartedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    public void Complete()
-    {
-        if (Status is not (RouteStatus.InProgress or RouteStatus.Published))
-            throw new DomainException($"A route in '{Status}' cannot be completed.");
-
-        Status = RouteStatus.Completed;
-        CompletedAt = DateTime.UtcNow;
-        Touch();
-    }
-
-    public void Cancel()
-    {
-        if (Status == RouteStatus.Completed)
-            throw new DomainException("A completed route cannot be canceled.");
-
-        Status = RouteStatus.Canceled;
-        Touch();
-    }
-
-    // --- Details -----------------------------------------------------------
-
-    public void Rename(string name)
-    {
-        EnsureOpen();
-
-        if (string.IsNullOrWhiteSpace(name))
-            throw new DomainException("Route name is required.");
-
-        Name = name.Trim();
-        Touch();
-    }
-
-    /// <summary>
-    /// Assigns the driver who will run this route. Reassigning a published route resets the
-    /// notification state, because the new driver has not been told about it.
-    /// </summary>
-    public void AssignDriver(Guid? userId)
-    {
-        EnsureOpen();
-
-        if (AssignedDriverUserId == userId) return;
-
-        AssignedDriverUserId = userId;
-        DriverNotifiedAt = null;
-        DriverAcknowledgedAt = null;
-        Touch();
-    }
-
-    /// <summary>
-    /// Changes the shift window the optimiser should plan within.
-    /// </summary>
-    public void ChangeShiftEnd(TimeOnly? plannedEndTime)
-    {
-        EnsureEditable();
-
-        if (plannedEndTime.HasValue && plannedEndTime.Value <= PlannedStartTime)
-            throw new DomainException("A route's shift must end after it starts.");
-
-        PlannedEndTime = plannedEndTime;
-        MarkStopsChanged();
-    }
-
-    /// <summary>
-    /// Changes the planned departure. Estimated arrival times are anchored to it, so the route
-    /// needs re-optimising.
-    /// </summary>
-    public void ChangeStartTime(TimeOnly plannedStartTime)
-    {
-        EnsureEditable();
-
-        PlannedStartTime = plannedStartTime;
-        MarkStopsChanged();
-    }
-
     // --- Internals ---------------------------------------------------------
+
+    /// <summary>
+    /// Reconciles the stop list against a publication, preserving surviving stops so their
+    /// loading state is not lost when a dispatcher republishes.
+    /// </summary>
+    private void ReplaceStops(IReadOnlyCollection<PublishedRouteStop> stops)
+    {
+        var incoming = stops
+            .Where(s => s.DeliveryId != Guid.Empty)
+            .GroupBy(s => s.DeliveryId)
+            .Select(g => g.OrderBy(s => s.Sequence).First())
+            .ToList();
+
+        if (incoming.Count == 0)
+            throw new DomainException("A published route must contain at least one delivery stop.");
+
+        _stops.RemoveAll(existing => incoming.All(i => i.DeliveryId != existing.DeliveryId));
+
+        foreach (var stop in incoming)
+        {
+            var data = new PublishedStopData(
+                stop.DeliveryId,
+                stop.Sequence,
+                stop.ExternalStopId,
+                stop.PlannedArrival,
+                stop.PlannedDeparture,
+                stop.ActualArrival,
+                stop.ActualDeparture,
+                stop.DistanceFromPreviousKm);
+
+            var existing = _stops.FirstOrDefault(s => s.DeliveryId == stop.DeliveryId);
+
+            if (existing is null)
+            {
+                _stops.Add(RouteStop.FromPublished(Id, data));
+            }
+            else
+            {
+                existing.ApplyPublished(data);
+            }
+        }
+    }
 
     private RouteStop FindStop(Guid routeStopId) =>
         _stops.FirstOrDefault(s => s.Id == routeStopId)
             ?? throw new DomainException($"Route stop '{routeStopId}' was not found on this route.");
-
-    private void MarkStopsChanged()
-    {
-        StopsChangedAt = DateTime.UtcNow;
-
-        // A published route whose contents changed is no longer what the driver was given, so it
-        // returns to the staff's hands and the driver has to be notified again once re-published.
-        if (Status == RouteStatus.Published)
-        {
-            Status = RouteStatus.Optimized;
-            PublishedAt = null;
-            DriverNotifiedAt = null;
-            DriverAcknowledgedAt = null;
-        }
-
-        Touch();
-    }
-
-    private void EnsureEditable()
-    {
-        if (Status is RouteStatus.InProgress)
-            throw new DomainException("A route that is already running cannot be changed.");
-
-        EnsureOpen();
-    }
-
-    private void EnsureOpen()
-    {
-        if (IsClosed)
-            throw new DomainException($"This route is already '{Status}' and cannot be changed.");
-    }
 
     private void Touch() => UpdatedAt = DateTime.UtcNow;
 }

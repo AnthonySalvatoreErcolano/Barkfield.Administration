@@ -48,6 +48,16 @@ public class Delivery
     /// <summary>Astro Loyalty rewards applied. Phase 2 automates this; staff tick it until then.</summary>
     public bool AstroCompleted { get; private set; }
 
+    /// <summary>
+    /// The routing provider's identifier for this delivery, once pushed. Our own
+    /// <see cref="Id"/> is sent as their customer order number, so it round-trips on every
+    /// webhook — this is kept for direct calls back to them (fetching photos, cancelling).
+    /// </summary>
+    public string? ExternalOrderId { get; private set; }
+
+    /// <summary>Set when this delivery was pushed to the routing provider for planning.</summary>
+    public DateTime? SentToRoutingAt { get; private set; }
+
     /// <summary>The customer location this delivery goes to.</summary>
     public Guid DeliveryLocationId { get; private set; }
 
@@ -172,6 +182,8 @@ public class Delivery
         ProcurementStatus procurementStatus,
         bool hasPaid,
         bool astroCompleted,
+        string? externalOrderId,
+        DateTime? sentToRoutingAt,
         Guid deliveryLocationId,
         Address deliveryAddress,
         GeoPoint? deliveryCoordinates,
@@ -198,6 +210,8 @@ public class Delivery
             ProcurementStatus = procurementStatus,
             HasPaid = hasPaid,
             AstroCompleted = astroCompleted,
+            ExternalOrderId = externalOrderId,
+            SentToRoutingAt = sentToRoutingAt,
             DeliveryLocationId = deliveryLocationId,
             DeliveryAddress = deliveryAddress,
             DeliveryCoordinates = deliveryCoordinates,
@@ -391,6 +405,40 @@ public class Delivery
     }
 
     // --- Routing & flags ---------------------------------------------------
+
+    /// <summary>
+    /// Records that this delivery has been pushed to the routing provider for planning.
+    /// </summary>
+    /// <returns>True if this changed anything; false if it had already been sent.</returns>
+    /// <remarks>
+    /// Idempotent, because a staff double-click or a retried push must not create a second order.
+    /// </remarks>
+    public bool MarkSentToRouting(string externalOrderId)
+    {
+        if (string.IsNullOrWhiteSpace(externalOrderId))
+            throw new DomainException("An external order identifier is required.");
+
+        EnsureOpen();
+
+        if (ExternalOrderId == externalOrderId.Trim()) return false;
+
+        ExternalOrderId = externalOrderId.Trim();
+        SentToRoutingAt = DateTime.UtcNow;
+        Touch();
+        return true;
+    }
+
+    /// <summary>
+    /// Clears the routing provider link, when a delivery is pulled back before it ships.
+    /// </summary>
+    public void ClearRoutingLink()
+    {
+        EnsureOpen();
+
+        ExternalOrderId = null;
+        SentToRoutingAt = null;
+        Touch();
+    }
 
     /// <summary>
     /// Marks the delivery as sitting on a published route.
