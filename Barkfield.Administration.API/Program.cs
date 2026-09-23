@@ -1,11 +1,20 @@
 using Barkfield.Administration.API;
 using Barkfield.Administration.API.Middleware;
+using Barkfield.Administration.API.Bootstrap;
 using Scalar.AspNetCore;
 
 public partial class Program
 {
     private static void Main(string[] args)
     {
+        // Bootstrap commands run instead of the web host, so the first administrator can be
+        // created before anyone can sign in to create one.
+        if (CreateAdminCommand.Matches(args))
+        {
+            Environment.ExitCode = CreateAdminCommand.RunAsync(args).GetAwaiter().GetResult();
+            return;
+        }
+
         var builder = WebApplication.CreateBuilder(args);
         builder.Resolver();
 

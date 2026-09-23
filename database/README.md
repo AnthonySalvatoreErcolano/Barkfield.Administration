@@ -39,21 +39,24 @@ because it removes a whole class of deployment mistake.
 
 ## Creating the first user
 
-Nothing seeds a login — a script that ships a known password hash is a liability the
-moment it reaches production. Create the first administrator by hand:
+Nothing seeds a login — a script shipping a known password hash is a liability the
+moment it reaches production. Use the bootstrap command instead:
 
-1. Generate a BCrypt hash (work factor 12, matching `PasswordHasher`).
-2. Insert the user and grant the Administrator role:
-
-```sql
-DECLARE @UserId UNIQUEIDENTIFIER = NEWID();
-
-INSERT INTO dbo.Users (Id, Name, Email, PasswordHash, IsActive, IsAdmin, CreatedAt)
-VALUES (@UserId, 'Your Name', 'you@example.com', '<bcrypt hash>', 1, 1, SYSUTCDATETIME());
-
-INSERT INTO dbo.UserRoles (UserId, RoleId)
-VALUES (@UserId, '11111111-1111-1111-1111-111111111111');
+```bash
+cd Barkfield.Administration.API
+dotnet run -- create-admin --email you@barkfieldroad.com --name "Your Name"
 ```
+
+It prompts for the password without echoing it, so the password never lands in shell
+history. Pass `--password "..."` to supply it non-interactively for scripted setup.
+
+It reads the same `ConnectionStrings:ConnectionString` the API uses, hashes through the
+same `IPasswordHasher` the sign-in path uses, refuses a duplicate email or a password
+under 12 characters, and grants the Administrator role.
+
+**Do not write this INSERT by hand.** `PasswordHash` holds a BCrypt hash at work factor
+12, which T-SQL cannot produce — hand-written SQL means generating the hash somewhere
+else and hoping the work factor matches. The command exists so that cannot drift.
 
 ## Conventions
 
