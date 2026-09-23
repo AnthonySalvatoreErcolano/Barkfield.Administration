@@ -1,20 +1,23 @@
-﻿using Barkfield.Administration.Domain.Shared.Exceptions;
+using Barkfield.Administration.Domain.Shared.Exceptions;
 using Barkfield.Administration.Domain.ValueObjects;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 
 namespace Barkfield.Administration.Domain.Entities;
 
+/// <summary>
+/// A customer's pet, with the allergies that constrain what they can be sent.
+/// </summary>
+/// <remarks>
+/// Allergies are the operationally important part: they are what staff check before a
+/// protein goes in a box, which is why they travel with the pet rather than being a
+/// separate lookup.
+/// </remarks>
 public class Pet
 {
-    private readonly List<PetAllergy> _allergies = [];
+    private readonly List<Guid> _allergyIds = [];
 
-    // Aggregate Identifiers
     public Guid Id { get; private set; }
     public Guid CustomerId { get; private set; }
 
-    // Domain Properties
     public string Name { get; private set; } = string.Empty;
     public DateTime? Birthday { get; private set; }
     public PetType PetType { get; private set; }
@@ -22,20 +25,19 @@ public class Pet
     public string? Notes { get; private set; }
     public string? PictureUrl { get; private set; }
 
-    // Encapsulated Collection Read-Only Access
-    public IReadOnlyCollection<PetAllergy> Allergies => _allergies.AsReadOnly();
+    /// <summary>
+    /// False once deactivated. Pets are not deleted — most often one leaves the list because
+    /// it has died, and the record is worth keeping.
+    /// </summary>
+    public bool IsActive { get; private set; }
 
-    // Audit Metadata
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
 
-    // Private constructor enforces factory usage
+    public IReadOnlyCollection<Guid> AllergyIds => _allergyIds.AsReadOnly();
+
     private Pet() { }
 
-    /// <summary>
-    /// Factory method for creating a new Pet aggregate entity.
-    /// Ensures valid ownership, valid name, and prevents future birthdays.
-    /// </summary>
     public static Pet Create(
         Guid customerId,
         string name,
@@ -44,13 +46,14 @@ public class Pet
         string? breed = null,
         string? notes = null,
         string? pictureUrl = null,
-        IEnumerable<PetAllergy>? allergies = null)
+        IEnumerable<Guid>? allergyIds = null)
     {
         if (customerId == Guid.Empty)
-            throw new DomainException("Pet must belong to a valid Customer (CustomerId cannot be empty).");
+            throw new DomainException("A pet must belong to a valid customer.");
 
         ValidateName(name);
         ValidateBirthday(birthday);
+        ValidatePetType(petType);
 
         var pet = new Pet
         {
@@ -62,84 +65,145 @@ public class Pet
             Breed = breed?.Trim(),
             Notes = notes?.Trim(),
             PictureUrl = pictureUrl?.Trim(),
+            IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
 
-        if (allergies is not null)
+        if (allergyIds is not null)
         {
-            foreach (var allergy in allergies)
-            {
-                pet.AddAllergy(allergy);
-            }
+            pet._allergyIds.AddRange(allergyIds.Distinct().Where(id => id != Guid.Empty));
         }
 
         return pet;
     }
 
-    // --- Domain Behaviors & Mutations ---
+    public static Pet FromDto(
+        Guid id,
+        Guid customerId,
+        string name,
+        PetType petType,
+        DateTime? birthday,
+        string? breed,
+        string? notes,
+        string? pictureUrl,
+        bool isActive,
+        DateTime createdAt,
+        DateTime? updatedAt,
+        IEnumerable<Guid>? allergyIds = null)
+    {
+        if (id == Guid.Empty)
+            throw new DomainException("Invalid pet ID.");
+
+        var pet = new Pet
+        {
+            Id = id,
+            CustomerId = customerId,
+            Name = name,
+            PetType = petType,
+            Birthday = birthday,
+            Breed = breed,
+            Notes = notes,
+            PictureUrl = pictureUrl,
+            IsActive = isActive,
+            CreatedAt = createdAt,
+            UpdatedAt = updatedAt
+        };
+
+        if (allergyIds is not null)
+        {
+            pet._allergyIds.AddRange(allergyIds.Distinct());
+        }
+
+        return pet;
+    }
 
     /// <summary>
-    /// Updates the core profile details of the pet.
+    /// Updates the pet's details, running the same validation as creation.
     /// </summary>
-    public void UpdateProfile(string name, PetType petType, string? breed, DateTime? birthday)
+    public void Update(
+        string name,
+        PetType petType,
+        DateTime? birthday,
+        string? breed,
+        string? notes,
+        string? pictureUrl)
     {
         ValidateName(name);
         ValidateBirthday(birthday);
+        ValidatePetType(petType);
 
         Name = name.Trim();
         PetType = petType;
-        Breed = breed?.Trim();
         Birthday = birthday?.Date;
-        UpdatedAt = DateTime.UtcNow;
+        Breed = breed?.Trim();
+        Notes = notes?.Trim();
+        PictureUrl = pictureUrl?.Trim();
+        Touch();
     }
 
     /// <summary>
-    /// Adds a new allergy to the pet, preventing duplicates.
+    /// Replaces the allergy list wholesale. An empty list is valid — most pets have none.
     /// </summary>
-    public void AddAllergy(PetAllergy allergy)
+    public void SyncAllergies(IEnumerable<Guid>? allergyIds)
     {
-        ArgumentNullException.ThrowIfNull(allergy);
+        var ids = allergyIds?.Distinct().ToList() ?? [];
 
-        if (_allergies.Any(a => a.AllergyId == allergy.AllergyId))
-            return;
+        if (ids.Any(id => id == Guid.Empty))
+            throw new DomainException("Invalid allergy ID.");
 
-        _allergies.Add(allergy);
-        UpdatedAt = DateTime.UtcNow;
+        _allergyIds.Clear();
+        _allergyIds.AddRange(ids);
+        Touch();
     }
 
-    /// <summary>
-    /// Removes an allergy by id.
-    /// </summary>
+    public void AddAllergy(Guid allergyId)
+    {
+        if (allergyId == Guid.Empty)
+            throw new DomainException("Invalid allergy ID.");
+
+        if (_allergyIds.Contains(allergyId)) return;
+
+        _allergyIds.Add(allergyId);
+        Touch();
+    }
+
     public void RemoveAllergy(Guid allergyId)
     {
-        if (allergyId == Guid.Empty) return;
-
-        int removedCount = _allergies.RemoveAll(a => a.AllergyId == allergyId);
-        if (removedCount > 0)
+        if (_allergyIds.Remove(allergyId))
         {
-            UpdatedAt = DateTime.UtcNow;
+            Touch();
         }
     }
 
-    /// <summary>
-    /// Updates or replaces the pet's photo URL.
-    /// </summary>
     public void UpdatePicture(string? pictureUrl)
     {
         PictureUrl = pictureUrl?.Trim();
-        UpdatedAt = DateTime.UtcNow;
+        Touch();
     }
 
-    /// <summary>
-    /// Updates administrative or care notes for the pet.
-    /// </summary>
     public void UpdateNotes(string? notes)
     {
         Notes = notes?.Trim();
-        UpdatedAt = DateTime.UtcNow;
+        Touch();
     }
 
-    // --- Invariant Validations ---
+    public void Deactivate()
+    {
+        if (!IsActive) return;
+
+        IsActive = false;
+        Touch();
+    }
+
+    public void Reactivate()
+    {
+        if (IsActive) return;
+
+        IsActive = true;
+        Touch();
+    }
+
+    private void Touch() => UpdatedAt = DateTime.UtcNow;
 
     private static void ValidateName(string name)
     {
@@ -154,5 +218,11 @@ public class Pet
     {
         if (birthday.HasValue && birthday.Value.Date > DateTime.UtcNow.Date)
             throw new DomainException("Pet birthday cannot be in the future.");
+    }
+
+    private static void ValidatePetType(PetType petType)
+    {
+        if (!Enum.IsDefined(petType))
+            throw new DomainException($"Unknown pet type: {petType}.");
     }
 }

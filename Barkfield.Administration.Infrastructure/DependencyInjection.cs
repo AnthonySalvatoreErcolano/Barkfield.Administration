@@ -1,4 +1,6 @@
-﻿using Barkfield.Administration.Application.DataAccess.Customers;
+﻿using Barkfield.Administration.Application.DataAccess.Allergies;
+using Barkfield.Administration.Application.DataAccess.Customers;
+using Barkfield.Administration.Application.DataAccess.Pets;
 using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
 using Barkfield.Administration.Application.DataAccess.Identity.Roles;
 using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
@@ -7,7 +9,9 @@ using Barkfield.Administration.Application.Services.Email;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
+using Barkfield.Administration.Infrastructure.DataAccess.Allergies;
 using Barkfield.Administration.Infrastructure.DataAccess.Customers;
+using Barkfield.Administration.Infrastructure.DataAccess.Pets;
 using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Roles;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Tokens;
@@ -81,6 +85,11 @@ namespace Barkfield.Administration.Infrastructure
         {
             services.AddScoped<ICustomerQueries, CustomerQueries>();
             services.AddScoped<ICustomerCommands, CustomerCommands>();
+
+            services.AddScoped<IPetQueries, PetQueries>();
+            services.AddScoped<IPetCommands, PetCommands>();
+            services.AddScoped<IAllergyQueries, AllergyQueries>();
+            services.AddScoped<IAllergyCommands, AllergyCommands>();
 
             services.AddScoped<IUserQueries, UserQueries>();
             services.AddScoped<IUserCommands, UserCommands>();

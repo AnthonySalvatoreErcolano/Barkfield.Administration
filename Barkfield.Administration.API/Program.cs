@@ -1,5 +1,6 @@
 using Barkfield.Administration.API;
 using Barkfield.Administration.API.Middleware;
+using Scalar.AspNetCore;
 
 public partial class Program
 {
@@ -15,7 +16,15 @@ public partial class Program
 
         if (app.Environment.IsDevelopment())
         {
+            // MapOpenApi serves the spec as JSON; Scalar renders it as a browsable,
+            // executable reference at /scalar. Development only — it documents every
+            // endpoint and request shape, which is not something to publish.
             app.MapOpenApi();
+            app.MapScalarApiReference(options =>
+            {
+                options.Title = "Barkfield Road — Admin API";
+                options.Theme = ScalarTheme.BluePlanet;
+            });
         }
         else
         {

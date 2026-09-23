@@ -1,5 +1,6 @@
 using Barkfield.Administration.Application.Common;
 using Barkfield.Administration.Application.DataAccess.Customers;
+using Barkfield.Administration.Application.DataAccess.Allergies;
 using Barkfield.Administration.Application.DataAccess.Pets;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Dapper;
@@ -182,20 +183,55 @@ public class CustomerQueries : ICustomerQueries
 
             SELECT
                 p.Id, p.CustomerId, p.Name, p.Birthday, p.PetType,
-                p.Breed, p.Notes, p.PictureUrl, p.CreatedAt, p.UpdatedAt
+                p.Breed, p.Notes, p.PictureUrl, p.IsActive, p.CreatedAt, p.UpdatedAt
             FROM dbo.Pets p
             INNER JOIN dbo.Customers c ON c.Id = p.CustomerId
-            WHERE {predicate}
-            ORDER BY p.Name;";
+            WHERE {predicate} AND p.IsActive = 1
+            ORDER BY p.Name;
+
+            SELECT pa.PetId, a.Id, a.AllergyName
+            FROM dbo.PetAllergies pa
+            INNER JOIN dbo.Allergies a ON a.Id = pa.AllergyId
+            INNER JOIN dbo.Pets p ON p.Id = pa.PetId
+            INNER JOIN dbo.Customers c ON c.Id = p.CustomerId
+            WHERE {predicate} AND p.IsActive = 1
+            ORDER BY a.AllergyName;";
 
         using var reader = await _sqlExecutor.QueryMultipleAsync(sql, parameters, cancellationToken);
 
         var customer = await reader.ReadSingleOrDefaultAsync<CustomerDetailDto>();
         if (customer is null) return null;
 
-        var pets = await reader.ReadAsync<PetDto>();
-        customer.Pets = pets.ToList();
+        var pets = (await reader.ReadAsync<PetDto>()).ToList();
+        var allergyRows = await reader.ReadAsync<CustomerPetAllergyRow>();
+
+        // Allergies come back in the same round trip and are stitched on here — staff check
+        // them before a protein goes in a box, so a pet without them is not much use.
+        var byPet = allergyRows
+            .GroupBy(r => r.PetId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyCollection<AllergyDto>)g
+                    .Select(r => new AllergyDto { Id = r.Id, AllergyName = r.AllergyName })
+                    .ToList());
+
+        foreach (var pet in pets)
+        {
+            if (byPet.TryGetValue(pet.Id, out var allergies))
+            {
+                pet.Allergies = allergies;
+            }
+        }
+
+        customer.Pets = pets;
 
         return customer;
+    }
+
+    private sealed class CustomerPetAllergyRow
+    {
+        public Guid PetId { get; set; }
+        public Guid Id { get; set; }
+        public string AllergyName { get; set; } = string.Empty;
     }
 }

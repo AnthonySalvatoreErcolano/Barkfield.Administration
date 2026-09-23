@@ -1,6 +1,67 @@
-@Barkfield.Administration.API_HostAddress = http://localhost:5147
+@host = http://localhost:5199
 
-GET {{Barkfield.Administration.API_HostAddress}}/weatherforecast/
-Accept: application/json
+### Sign in. Copy accessToken from the response into @token below.
+# @name login
+POST {{host}}/api/auth/login
+Content-Type: application/json
 
-###
+{ "email": "admin@barkfield.test", "password": "admin-password-123" }
+
+@token = {{login.response.body.accessToken}}
+
+### Current user
+GET {{host}}/api/users/me
+Authorization: Bearer {{token}}
+
+### Customers — paged. Note: the search parameter is searchTerm, not search.
+GET {{host}}/api/customers?searchTerm=&pageNumber=1&pageSize=25&sortBy=name&sortDescending=false
+Authorization: Bearer {{token}}
+
+### Customer detail, including active pets and their allergies
+GET {{host}}/api/customers/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{token}}
+
+### Create a customer
+POST {{host}}/api/customers
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "firstName": "Sarah", "lastName": "Doe", "email": "sarah@example.com",
+  "phoneNumber": "6315550123",
+  "street": "12 Main St", "city": "Huntington", "state": "NY", "zipCode": "11743"
+}
+
+### Allergy picker
+GET {{host}}/api/allergies
+Authorization: Bearer {{token}}
+
+### A customer's pets
+GET {{host}}/api/customers/00000000-0000-0000-0000-000000000000/pets
+Authorization: Bearer {{token}}
+
+### Add a pet. PetType: 1 Dog, 2 Cat, 3 Other.
+POST {{host}}/api/customers/00000000-0000-0000-0000-000000000000/pets
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{
+  "name": "Rex", "petType": 1, "breed": "Labrador",
+  "birthday": "2021-04-02", "notes": "nervous around the van",
+  "allergyIds": []
+}
+
+### Staff users
+GET {{host}}/api/users?pageSize=25
+Authorization: Bearer {{token}}
+
+### Roles, for the assignment picker
+GET {{host}}/api/roles
+Authorization: Bearer {{token}}
+
+### Refresh the session (uses the HttpOnly cookie)
+POST {{host}}/api/auth/refresh-token
+
+### Sign out
+POST {{host}}/api/auth/logout
+Authorization: Bearer {{token}}
