@@ -1,12 +1,18 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Customers;
 using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
+using Barkfield.Administration.Application.DataAccess.Identity.Roles;
+using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
 using Barkfield.Administration.Application.DataAccess.Users;
+using Barkfield.Administration.Application.Services.Email;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.DataAccess.Customers;
 using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
+using Barkfield.Administration.Infrastructure.DataAccess.Identity.Roles;
+using Barkfield.Administration.Infrastructure.DataAccess.Identity.Tokens;
 using Barkfield.Administration.Infrastructure.DataAccess.Users;
+using Barkfield.Administration.Infrastructure.Services.Email;
 using Barkfield.Administration.Infrastructure.Services.Identity;
 using Barkfield.Administration.Infrastructure.Services.Square;
 using Barkfield.Administration.Infrastructure.Settings;
@@ -62,6 +68,10 @@ namespace Barkfield.Administration.Infrastructure
             services.AddScoped<ITokenGenerator, TokenGenerator>();
             services.AddScoped<ICookieService, CookieService>();
             services.AddScoped<IIdentityService, IdentityService>();
+
+            // Placeholder transport: logs instead of sending. Swap for a real provider
+            // before go-live -- see LoggingEmailService.
+            services.AddScoped<IEmailService, LoggingEmailService>();
         }
 
         /// <summary>
@@ -71,13 +81,15 @@ namespace Barkfield.Administration.Infrastructure
         {
             services.AddScoped<ICustomerQueries, CustomerQueries>();
             services.AddScoped<ICustomerCommands, CustomerCommands>();
+
             services.AddScoped<IUserQueries, UserQueries>();
+            services.AddScoped<IUserCommands, UserCommands>();
+            services.AddScoped<IRoleQueries, RoleQueries>();
+
             services.AddScoped<IRefreshTokenQueries, RefreshTokenQueries>();
             services.AddScoped<IRefreshTokenCommands, RefreshTokenCommands>();
-
-            // TODO: IUserCommands, IUserRoleCommands and IUserRoleQueries have no
-            // implementations yet, so resolving UserService and IIdentityService still
-            // fails at startup. The customer slice is complete.
+            services.AddScoped<IPasswordResetTokenQueries, PasswordResetTokenQueries>();
+            services.AddScoped<IPasswordResetTokenCommands, PasswordResetTokenCommands>();
         }
         private static void ConfigureSquare(this IServiceCollection services, IConfiguration configuration)
         {

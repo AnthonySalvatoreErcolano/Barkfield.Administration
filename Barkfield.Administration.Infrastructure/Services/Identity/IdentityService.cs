@@ -1,255 +1,236 @@
-﻿using Barkfield.Administration.Application.DataAccess.Dtos;
+using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
+using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
 using Barkfield.Administration.Application.DataAccess.Users;
-using Barkfield.Administration.Application.Repositories.Identity.Roles.UserRoles;
+using Barkfield.Administration.Application.Services.Email;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Application.Services.Identity.Models;
-using Barkfield.Administration.Domain.Entities;
 using Barkfield.Administration.Domain.Entities.Identity.Tokens;
 using Barkfield.Administration.Domain.Shared.Exceptions;
-using Barkfield.Administration.Infrastructure.Connections.Database;
-using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.Settings;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Microsoft.IdentityModel.Tokens;
-using System;
-using System.Collections.Generic;
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
-using System.Security.Cryptography;
-using System.Text;
 
-namespace Barkfield.Administration.Infrastructure.Services.Identity
+namespace Barkfield.Administration.Infrastructure.Services.Identity;
+
+/// <summary>
+/// Sign-in, session lifetime and password reset.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Access tokens are short-lived JWTs; sessions are extended with a rotating refresh token
+/// stored only as a SHA-256 hash. Presenting an already-revoked token is treated as theft
+/// and revokes every token for that user.
+/// </para>
+/// <para>
+/// The password reset flow is deliberately silent about whether an email is registered:
+/// every request returns the same response, so the endpoint cannot be used to enumerate
+/// accounts.
+/// </para>
+/// </remarks>
+internal class IdentityService : IIdentityService
 {
-    internal class IdentityService(
-        IPasswordHasher _passwordHasher,
+    private static readonly TimeSpan ResetTokenLifetime = TimeSpan.FromHours(1);
+
+    private readonly IPasswordHasher _passwordHasher;
+    private readonly ITokenGenerator _tokenGenerator;
+    private readonly IUserQueries _userQueries;
+    private readonly IUserCommands _userCommands;
+    private readonly IRefreshTokenQueries _refreshTokenQueries;
+    private readonly IRefreshTokenCommands _refreshTokenCommands;
+    private readonly IPasswordResetTokenQueries _resetTokenQueries;
+    private readonly IPasswordResetTokenCommands _resetTokenCommands;
+    private readonly IEmailService _emailService;
+    private readonly ILogger<IdentityService> _logger;
+    private readonly JwtSettings _jwtSettings;
+
+    public IdentityService(
+        IPasswordHasher passwordHasher,
         ITokenGenerator tokenGenerator,
-        IUserQueries _userQueries,
-        IUserCommands _userCommands,
-        ISqlExecutor sqlExecutor,
-        IOptions<JwtSettings> jwtOptions) : IIdentityService
+        IUserQueries userQueries,
+        IUserCommands userCommands,
+        IRefreshTokenQueries refreshTokenQueries,
+        IRefreshTokenCommands refreshTokenCommands,
+        IPasswordResetTokenQueries resetTokenQueries,
+        IPasswordResetTokenCommands resetTokenCommands,
+        IEmailService emailService,
+        ILogger<IdentityService> logger,
+        IOptions<JwtSettings> jwtOptions)
     {
-        private readonly JwtSettings _jwtSettings = jwtOptions.Value;
+        _passwordHasher = passwordHasher;
+        _tokenGenerator = tokenGenerator;
+        _userQueries = userQueries;
+        _userCommands = userCommands;
+        _refreshTokenQueries = refreshTokenQueries;
+        _refreshTokenCommands = refreshTokenCommands;
+        _resetTokenQueries = resetTokenQueries;
+        _resetTokenCommands = resetTokenCommands;
+        _emailService = emailService;
+        _logger = logger;
+        _jwtSettings = jwtOptions.Value;
+    }
 
+    private int RefreshTokenDays => _jwtSettings.RefreshTokenExpiryDays > 0 ? _jwtSettings.RefreshTokenExpiryDays : 7;
 
-        public async Task<AuthenticationResult?> LoginAsync(string email,string password)
+    public async Task<AuthenticationResult?> LoginAsync(string email, string password)
+    {
+        UserCredentialsDto? user = await _userQueries.GetCredentialsByEmailAsync(email, CancellationToken.None);
+
+        // Verify even when the user is missing or inactive, so the response time does not
+        // reveal which emails are registered.
+        bool passwordMatches = _passwordHasher.VerifyPassword(
+            password,
+            user?.PasswordHash ?? "$2a$12$0000000000000000000000000000000000000000000000000000");
+
+        if (user is null || !user.IsActive || !passwordMatches)
         {
+            return null;
+        }
 
+        return await IssueSessionAsync(user.Id, user.Email, CancellationToken.None);
+    }
 
-            LoginDto? user = await sqlExecutor.QuerySingleAsync<LoginDto>(@"SELECT Id, Name, Email, PasswordHash, IsActive 
-            FROM Users 
-            WHERE Email = @Email AND IsActive=1;", new { Email = email });
+    public async Task LogoutAsync(string? userId, string? refreshToken, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(refreshToken))
+        {
+            await _refreshTokenCommands.RevokeTokenAsync(
+                _tokenGenerator.HashToken(refreshToken), "User logged out", null, null, cancellationToken);
 
-            if (user == null) return null;
+            return;
+        }
 
-            var verificationResult = _passwordHasher.VerifyPassword( password,user.PasswordHash);
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            await _refreshTokenCommands.RevokeAllUserTokensAsync(
+                userId, "User global logout", null, cancellationToken);
+        }
+    }
 
-            if (!verificationResult) return null;
+    public async Task<AuthenticationResult?> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(refreshToken)) return null;
 
-            var accessToken = tokenGenerator.GenerateJwtToken(user.Id, email);
-            var rawRefreshToken = tokenGenerator.GenerateRefreshTokenString();
-            var refreshTokenHash = tokenGenerator.HashToken(rawRefreshToken);
+        string tokenHash = _tokenGenerator.HashToken(refreshToken);
 
-            var refreshTokenExpiresAt = DateTime.UtcNow.AddDays(_jwtSettings.RefreshTokenExpiryDays > 0 ? _jwtSettings.RefreshTokenExpiryDays : 7);
-            
-            const string insertRefreshTokenSql = @"
-                INSERT INTO RefreshTokens (UserId, TokenHash, ExpiresAt, CreatedAt)
-                VALUES (@UserId, @TokenHash, @ExpiresAt, @CreatedAt);";
-            await sqlExecutor.ExecuteAsync(insertRefreshTokenSql, new
+        RefreshToken? stored = await _refreshTokenQueries.GetByHashAsync(tokenHash, cancellationToken);
+        if (stored is null) return null;
+
+        // Reuse detection: a token that has already been rotated away should never be
+        // presented again. Treat it as a stolen token and end every session for that user.
+        if (stored.RevokedAt is not null)
+        {
+            _logger.LogWarning(
+                "Refresh token reuse detected for user {UserId}. Revoking all their sessions.", stored.UserId);
+
+            await _refreshTokenCommands.RevokeAllUserTokensAsync(
+                stored.UserId.ToString(), "Token reuse detected", null, cancellationToken);
+
+            return null;
+        }
+
+        if (DateTime.UtcNow >= stored.ExpiresAt) return null;
+
+        UserCredentialsDto? user = await _userQueries.GetCredentialsByIdAsync(stored.UserId, cancellationToken);
+        if (user is null || !user.IsActive) return null;
+
+        AuthenticationResult result = await IssueSessionAsync(user.Id, user.Email, cancellationToken);
+
+        await _refreshTokenCommands.RevokeTokenAsync(
+            tokenHash,
+            "Replaced by new token",
+            null,
+            _tokenGenerator.HashToken(result.RefreshToken),
+            cancellationToken);
+
+        return result;
+    }
+
+    public async Task<Guid?> RegisterAsync(string email, string password, string name) =>
+        throw new NotSupportedException(
+            "Self-registration is not offered. Staff accounts are created by an administrator through the users endpoint.");
+
+    public async Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken)
+    {
+        UserCredentialsDto? user = await _userQueries.GetCredentialsByEmailAsync(email, cancellationToken);
+
+        // Return silently for unknown or inactive accounts. The caller always reports the
+        // same thing, so this endpoint cannot be used to discover which emails exist.
+        if (user is null || !user.IsActive) return;
+
+        // A new request supersedes any outstanding link rather than leaving several live.
+        await _resetTokenCommands.InvalidateForUserAsync(user.Id, cancellationToken);
+
+        string rawToken = _tokenGenerator.GenerateRawToken();
+        string tokenHash = _tokenGenerator.HashToken(rawToken);
+
+        PasswordResetToken token = PasswordResetToken.Create(user.Id, tokenHash, ResetTokenLifetime);
+
+        await _resetTokenCommands.CreateAsync(
+            new PasswordResetTokenDto
             {
-                UserId = user.Id,
-                TokenHash = refreshTokenHash,
-                ExpiresAt = refreshTokenExpiresAt,
+                Id = token.Id,
+                UserId = token.UserId,
+                TokenHash = token.TokenHash,
+                ExpiresAt = token.ExpiresAt,
+                IsUsed = token.IsUsed,
+                CreatedAt = token.CreatedAt
+            },
+            cancellationToken);
+
+        // Only the hash is stored, so this is the one moment the raw token exists.
+        await _emailService.SendPasswordResetAsync(
+            user.Email, user.Name, rawToken, token.ExpiresAt, cancellationToken);
+    }
+
+    public async Task CompletePasswordResetAsync(
+        string email,
+        string rawToken,
+        string newPassword,
+        CancellationToken cancellationToken)
+    {
+        UserCredentialsDto? user = await _userQueries.GetCredentialsByEmailAsync(email, cancellationToken);
+        if (user is null || !user.IsActive)
+        {
+            throw new DomainException("Invalid or expired password reset request.");
+        }
+
+        PasswordResetTokenDto? stored = await _resetTokenQueries.GetActiveForUserAsync(user.Id, cancellationToken);
+        if (stored is null)
+        {
+            throw new DomainException("Invalid or expired password reset request.");
+        }
+
+        if (!_tokenGenerator.VerifyToken(rawToken, stored.TokenHash))
+        {
+            throw new DomainException("Invalid or expired password reset request.");
+        }
+
+        await _userCommands.UpdatePasswordAsync(
+            user.Id, _passwordHasher.HashPassword(newPassword), cancellationToken);
+
+        await _resetTokenCommands.MarkUsedAsync(stored.Id, cancellationToken);
+
+        // A password change ends every existing session — that is the point of resetting it.
+        await _refreshTokenCommands.RevokeAllUserTokensAsync(
+            user.Id.ToString(), "Password was reset", null, cancellationToken);
+    }
+
+    private async Task<AuthenticationResult> IssueSessionAsync(Guid userId, string email, CancellationToken cancellationToken)
+    {
+        string accessToken = _tokenGenerator.GenerateJwtToken(userId, email);
+        string rawRefreshToken = _tokenGenerator.GenerateRefreshTokenString();
+        DateTime expiresAt = DateTime.UtcNow.AddDays(RefreshTokenDays);
+
+        await _refreshTokenCommands.CreateAsync(
+            new RefreshToken
+            {
+                UserId = userId,
+                TokenHash = _tokenGenerator.HashToken(rawRefreshToken),
+                ExpiresAt = expiresAt,
                 CreatedAt = DateTime.UtcNow
-            });
-            return new AuthenticationResult(
-                accessToken,
-                rawRefreshToken,
-                refreshTokenExpiresAt,
-                email,
-                user.Id);
-        }
-        public async Task<Guid?> RegisterAsync(string email, string password, string name)
-        {
-            string hashedPassword = _passwordHasher.HashPassword(password);
-            // Dapper execution here...
+            },
+            cancellationToken);
 
-            return Guid.NewGuid();
-        }
-        //Return here
-        public async Task LogoutAsync(string? userId, string? refreshToken, CancellationToken cancellationToken)
-        {
-            if (!string.IsNullOrWhiteSpace(refreshToken))
-            {
-                var tokenHash = tokenGenerator.HashToken(refreshToken);
-
-                const string revokeTokenSql = @"
-            UPDATE RefreshTokens
-            SET RevokedAt = GETUTCDATE(),
-                ReasonRevoked = 'User Logged Out'
-            WHERE TokenHash = @TokenHash 
-              AND UserId = @UserId 
-              AND RevokedAt IS NULL;";
-
-                await sqlExecutor.ExecuteAsync(revokeTokenSql, new
-                {
-                    TokenHash = tokenHash,
-                    UserId = userId
-                });
-
-                return;
-            }
-
-            const string revokeAllTokensSql = @"
-        UPDATE RefreshTokens
-        SET RevokedAt = GETUTCDATE(),
-            ReasonRevoked = 'User Global Logout'
-        WHERE UserId = @UserId 
-          AND RevokedAt IS NULL;";
-
-            await sqlExecutor.ExecuteAsync(revokeAllTokensSql, new { UserId = userId });
-        }
-        public async Task<AuthenticationResult?> RefreshTokenAsync(string refreshToken, CancellationToken cancellationToken)
-        {
-            var tokenHash = tokenGenerator.HashToken(refreshToken);
-
-            // 1. Fetch active token & user details via Dapper
-            const string getRefreshTokenSql = @"
-        SELECT 
-            rt.Id AS TokenId,
-            rt.UserId,
-            rt.ExpiresAt,
-            rt.RevokedAt,
-            u.Email,
-            u.IsActive
-        FROM RefreshTokens rt
-        INNER JOIN Users u ON rt.UserId = u.Id
-        WHERE rt.TokenHash = @TokenHash;";
-
-            var tokenRecord = await sqlExecutor.QuerySingleAsync<RefreshTokenDto>(
-                getRefreshTokenSql,
-                new { TokenHash = tokenHash }
-            );
-
-            // 2. Security Checks
-            if (tokenRecord is null) return null; // Token does not exist
-
-            // Reuse Detection: If token was already revoked, someone may have stolen it.
-            // Revoke ALL user tokens immediately as a safety precaution.
-            if (tokenRecord.RevokedAt is not null)
-            {
-                await LogoutAsync(tokenRecord.UserId.ToString(), null, cancellationToken);
-                return null;
-            }
-
-            // Expiration or Inactive User check
-            if (DateTime.UtcNow >= tokenRecord.ExpiresAt || !tokenRecord.IsActive)
-            {
-                return null;
-            }
-
-            // 3. Generate new Access Token and new Refresh Token (Token Rotation)
-            var newAccessToken = tokenGenerator.GenerateJwtToken(tokenRecord.UserId, tokenRecord.Email);
-            var newRawRefreshToken = tokenGenerator.GenerateRefreshTokenString();
-            var newRefreshTokenHash = tokenGenerator.HashToken(newRawRefreshToken);
-
-            var newRefreshTokenExpiresAt = DateTime.UtcNow.AddDays(
-                _jwtSettings.RefreshTokenExpiryDays > 0 ? _jwtSettings.RefreshTokenExpiryDays : 7
-            );
-
-            // 4. Database Transaction: Revoke old token & Insert new rotated token
-            const string rotateTokensSql = @"
-        UPDATE RefreshTokens 
-        SET RevokedAt = GETUTCDATE(), 
-            ReplacedByTokenHash = @NewTokenHash,
-            ReasonRevoked = 'Replaced by new token'
-        WHERE Id = @OldTokenId;
-
-        INSERT INTO RefreshTokens (UserId, TokenHash, ExpiresAt, CreatedAt)
-        VALUES (@UserId, @NewTokenHash, @ExpiresAt, GETUTCDATE());";
-
-            await sqlExecutor.ExecuteAsync(rotateTokensSql, new
-            {
-                OldTokenId = tokenRecord.TokenId,
-                UserId = tokenRecord.UserId,
-                NewTokenHash = newRefreshTokenHash,
-                ExpiresAt = newRefreshTokenExpiresAt
-            });
-
-            return new AuthenticationResult(
-                newAccessToken,
-                newRawRefreshToken,
-                newRefreshTokenExpiresAt,
-                tokenRecord.Email,
-                tokenRecord.UserId
-            );
-        }
-        // TODO(chunk 2 - Identity): password reset is not implemented. It needs an
-        // IEmailService abstraction plus IUserQueries.GetByEmailWithResetTokenAsync and
-        // IUserCommands.CreateResetToken / UpdatePasswordAsync, none of which exist yet.
-        // The original draft is preserved below.
-        public Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken)
-        {
-            throw new NotImplementedException("Password reset request is not implemented yet.");
-        }
-
-        public Task CompletePasswordResetAsync(string email, string rawToken, string newPassword, CancellationToken cancellationToken)
-        {
-            throw new NotImplementedException("Password reset completion is not implemented yet.");
-        }
-
-        #region Original password-reset draft (does not compile; kept for reference)
-//         public async Task RequestPasswordResetAsync(string email, CancellationToken cancellationToken)
-//         {
-//             UserDto? dto = await _userQueries.GetUserByEmailAsync(email, cancellationToken);
-// 
-//             // Prevent email enumeration: return silently if user does not exist
-//             if (dto is null) return;
-// 
-//             // 1. Generate raw token and computed hash via ITokenHasher
-//             string rawToken = tokenGenerator.GenerateRawToken();
-//             string tokenHash = tokenGenerator.HashToken(rawToken);
-//             DateTime expiresAt = DateTime.UtcNow.AddHours(1);
-//             var resetToken = PasswordResetToken.Create( userId: dto.Id, tokenHash: tokenHash, validityDuration:TimeSpan.FromHours(1));
-// 
-//         
-//             await _userCommands.CreateResetToken(, cancellationToken);
-// 
-//             // 4. Send raw token to user via email infrastructure
-//             await _emailService.SendPasswordResetEmailAsync(dto.Email, rawToken, cancellationToken);
-//         }
-// 
-//         public async Task CompletePasswordResetAsync(string email, string rawToken, string newPassword, CancellationToken cancellationToken)
-//         {
-//             UserDto? dto = await _userQueries.GetByEmailWithResetTokenAsync(email, cancellationToken);
-//             if (dto is null || string.IsNullOrWhiteSpace(dto.PasswordResetTokenHash) || !dto.PasswordResetTokenExpiresAt.HasValue)
-//             {
-//                 throw new DomainException("Invalid password reset request.");
-//             }
-// 
-//             // 1. Verify expiration window
-//             if (DateTime.UtcNow > dto.PasswordResetTokenExpiresAt.Value)
-//             {
-//                 throw new DomainException("The password reset token has expired.");
-//             }
-// 
-//             // 2. Verify incoming raw token against stored hash using ITokenHasher
-//             bool isTokenValid = _tokenHasher.VerifyToken(rawToken, dto.PasswordResetTokenHash);
-//             if (!isTokenValid)
-//             {
-//                 throw new DomainException("Invalid password reset token.");
-//             }
-// 
-//             // 3. Hash new password via IPasswordHasher
-//             string newPasswordHash = _passwordHasher.HashPassword(newPassword);
-// 
-//             // 4. Rehydrate domain aggregate to enforce core domain validation on profile update
-//             IEnumerable<Guid> roles = await _userQueries.GetUserRoles(dto.Id, cancellationToken);
-//             User user = User.FromDto(dto.Id, dto.Name, dto.Email, newPasswordHash, dto.IsActive, dto.CreatedAt, roles);
-// 
-//             // 5. Persist updated password and clear reset token fields
-//             var command = new UpdateUserPasswordCommand(user.Id, user.PasswordHash);
-//             await _userCommands.UpdatePasswordAsync(command, cancellationToken);
-//         }
-        #endregion
+        return new AuthenticationResult(accessToken, rawRefreshToken, expiresAt, email, userId);
     }
 }

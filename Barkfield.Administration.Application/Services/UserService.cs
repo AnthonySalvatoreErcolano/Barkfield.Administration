@@ -1,104 +1,178 @@
-﻿using Barkfield.Administration.Application.DataAccess.Dtos;
+using Barkfield.Administration.Application.DataAccess.Identity.Roles;
 using Barkfield.Administration.Application.DataAccess.Users;
 using Barkfield.Administration.Application.Exceptions;
-using Barkfield.Administration.Application.Repositories.Identity.Roles.UserRoles;
+using Barkfield.Administration.Application.Services.Email;
 using Barkfield.Administration.Application.Services.Identity;
 using Barkfield.Administration.Domain.Entities;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Microsoft.Extensions.Logging;
 
-namespace Barkfield.Administration.Application.Services
+namespace Barkfield.Administration.Application.Services;
+
+/// <summary>
+/// Staff account management.
+/// </summary>
+public class UserService
 {
-    public class UserService
+    private readonly IUserQueries _userQueries;
+    private readonly IUserCommands _userCommands;
+    private readonly IRoleQueries _roleQueries;
+    private readonly IPasswordHasher _passwordHasher;
+    private readonly IEmailService _emailService;
+    private readonly ILogger<UserService> _logger;
+
+    public UserService(
+        IUserQueries userQueries,
+        IUserCommands userCommands,
+        IRoleQueries roleQueries,
+        IPasswordHasher passwordHasher,
+        IEmailService emailService,
+        ILogger<UserService> logger)
     {
-        private readonly IUserQueries _userQueries;
-        private readonly IUserCommands _userCommands;
-        private readonly IPasswordHasher _passwordHasher;
+        _userQueries = userQueries;
+        _userCommands = userCommands;
+        _roleQueries = roleQueries;
+        _passwordHasher = passwordHasher;
+        _emailService = emailService;
+        _logger = logger;
+    }
 
-        public UserService(IUserQueries userQueries, IUserCommands userCommands, IPasswordHasher passwordHasher)
+    public async Task<Guid> CreateUserAsync(
+        string name,
+        string email,
+        string password,
+        IEnumerable<Guid> roleIds,
+        bool isAdmin = false,
+        CancellationToken cancellationToken = default)
+    {
+        if (await _userQueries.EmailExistsAsync(email, null, cancellationToken))
         {
-            _userQueries = userQueries;
-            _userCommands = userCommands;
-            _passwordHasher = passwordHasher;
+            throw new ValidationException($"A user with the email '{email}' already exists.");
         }
 
-        public async Task<User> GetUserWithRoles(Guid userId, CancellationToken cancellationToken)
+        await EnsureRolesExistAsync(roleIds, cancellationToken);
+
+        string passwordHash = _passwordHasher.HashPassword(password);
+        User user = User.Create(name, email, passwordHash, roleIds, isAdmin);
+
+        await _userCommands.CreateAsync(user, cancellationToken);
+
+        try
         {
-            UserDetailDto? dto = await _userQueries.GetUserAndRolesByUserIdAsync(userId, cancellationToken);
-
-            if (dto is null)
-            {
-                throw new NotFoundException($"User with ID '{userId}' was not found.");
-            }
-
-            return User.FromDto(
-                dto.Id,
-                dto.Name,
-                dto.Email ?? string.Empty,
-                dto.PasswordHash ?? string.Empty,
-                dto.IsActive,
-                dto.CreatedAt,
-                dto.UserRoles ?? []);
+            await _emailService.SendWelcomeAsync(user.Email, user.Name, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // The account exists and is usable; a failed welcome email must not undo it.
+            _logger.LogError(ex, "User {UserId} was created but the welcome email failed.", user.Id);
         }
 
-        public async Task<Guid> CreateUserAsync(string email, string name, IEnumerable<Guid> roles, string password, CancellationToken cancellationToken)
+        return user.Id;
+    }
+
+    public async Task UpdateUserAsync(
+        Guid userId,
+        string name,
+        string email,
+        IEnumerable<Guid> roleIds,
+        bool isAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        User user = await LoadAsync(userId, cancellationToken);
+
+        if (await _userQueries.EmailExistsAsync(email, userId, cancellationToken))
         {
-            string passwordHash = _passwordHasher.HashPassword(password);
-            User user = User.Create(name, email, passwordHash, roles);
-            var roleParams = user.RoleIds.Select(roleId => new UserRoleDto { UserId = user.Id, RoleId = roleId });
-
-            await _userCommands.Create(
-                new UserDto
-                {
-                    Id = user.Id,
-                    Email = user.Email!,
-                    Name = user.Name,
-                    PasswordHash = passwordHash,
-                    IsActive = true,
-                    CreatedAt = user.CreatedAt
-                },
-                roleParams,
-                cancellationToken);
-
-            return user.Id;
+            throw new ValidationException($"Another user already uses the email '{email}'.");
         }
 
-        public async Task UpdateUserAsync(Guid userId, string name, string email, IEnumerable<Guid> roles, CancellationToken cancellationToken)
+        await EnsureRolesExistAsync(roleIds, cancellationToken);
+
+        user.UpdateProfile(name, email);
+        user.SyncRoles(roleIds);
+
+        if (isAdmin) user.GrantAdmin(); else user.RevokeAdmin();
+
+        await _userCommands.UpdateAsync(user, cancellationToken);
+    }
+
+    /// <summary>
+    /// Changes a user's own password, verifying the current one first.
+    /// </summary>
+    public async Task ChangePasswordAsync(
+        Guid userId,
+        string currentPassword,
+        string newPassword,
+        CancellationToken cancellationToken = default)
+    {
+        UserCredentialsDto credentials = await _userQueries.GetCredentialsByIdAsync(userId, cancellationToken)
+            ?? throw new NotFoundException($"User with ID '{userId}' was not found.");
+
+        if (!_passwordHasher.VerifyPassword(currentPassword, credentials.PasswordHash))
         {
-            UserDetailDto? dto = await _userQueries.GetUserAndRolesByUserIdAsync(userId, cancellationToken);
-
-            if (dto is null)
-            {
-                throw new NotFoundException($"User with ID '{userId}' was not found.");
-            }
-
-            User user = User.FromDto(
-                dto.Id,
-                dto.Name,
-                dto.Email ?? string.Empty,
-                dto.PasswordHash ?? string.Empty,
-                dto.IsActive,
-                dto.CreatedAt,
-                dto.UserRoles ?? []);
-
-            user.UpdateProfile(name, email);
-            user.SyncRoles(roles);
-
-            var roleParams = user.RoleIds.Select(roleId => new UserRoleDto { UserId = user.Id, RoleId = roleId });
-
-            await _userCommands.Update(
-                new UserDto
-                {
-                    Id = user.Id,
-                    Email = user.Email!,
-                    Name = user.Name,
-                    PasswordHash = user.PasswordHash!,
-                    IsActive = user.IsActive,
-                    CreatedAt = user.CreatedAt
-                },
-                roleParams,
-                cancellationToken);
+            throw new ValidationException("The current password is incorrect.");
         }
+
+        await _userCommands.UpdatePasswordAsync(
+            userId, _passwordHasher.HashPassword(newPassword), cancellationToken);
+    }
+
+    /// <summary>
+    /// Deactivates an account. Sign-in is refused from that moment, and the caller should
+    /// also revoke the user's refresh tokens so existing sessions cannot be extended.
+    /// </summary>
+    public async Task DeactivateUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (!await _userCommands.SetActiveAsync(userId, false, cancellationToken))
+        {
+            throw new NotFoundException($"User with ID '{userId}' was not found.");
+        }
+    }
+
+    public async Task ReactivateUserAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        if (!await _userCommands.SetActiveAsync(userId, true, cancellationToken))
+        {
+            throw new NotFoundException($"User with ID '{userId}' was not found.");
+        }
+    }
+
+    /// <summary>
+    /// Rejects unknown role ids up front, so a bad request fails with a clear message rather
+    /// than a foreign key violation from the database.
+    /// </summary>
+    private async Task EnsureRolesExistAsync(IEnumerable<Guid> roleIds, CancellationToken cancellationToken)
+    {
+        var requested = roleIds?.Distinct().ToList() ?? [];
+
+        if (requested.Count == 0)
+        {
+            throw new ValidationException("A user must be assigned at least one role.");
+        }
+
+        var existing = await _roleQueries.GetExistingIdsAsync(requested, cancellationToken);
+        var missing = requested.Except(existing).ToList();
+
+        if (missing.Count > 0)
+        {
+            throw new ValidationException($"Unknown role id(s): {string.Join(", ", missing)}.");
+        }
+    }
+
+    private async Task<User> LoadAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        UserCredentialsDto credentials = await _userQueries.GetCredentialsByIdAsync(userId, cancellationToken)
+            ?? throw new NotFoundException($"User with ID '{userId}' was not found.");
+
+        var roleIds = await _userQueries.GetRoleIdsAsync(userId, cancellationToken);
+
+        return User.FromDto(
+            credentials.Id,
+            credentials.Name,
+            credentials.Email,
+            credentials.PasswordHash,
+            credentials.IsActive,
+            credentials.IsAdmin,
+            credentials.CreatedAt,
+            credentials.UpdatedAt,
+            roleIds);
     }
 }

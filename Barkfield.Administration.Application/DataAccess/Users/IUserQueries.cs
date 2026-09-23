@@ -1,16 +1,24 @@
-﻿using Barkfield.Administration.Application.DataAccess.Dtos;
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Barkfield.Administration.Application.Common;
 
-namespace Barkfield.Administration.Application.DataAccess.Users
+namespace Barkfield.Administration.Application.DataAccess.Users;
+
+public interface IUserQueries
 {
-    public interface IUserQueries
-    {
-        public Task<UserDto?> GetUserByEmailAsync(string email, CancellationToken cancellationToken);
-        public Task<UserDto?> GetUserByIdAsync(Guid userId, CancellationToken cancellationToken);
-        public Task<UserDetailDto?> GetUserAndRolesByUserIdAsync(Guid userId, CancellationToken cancellationToken);
-        public Task<IEnumerable<Guid>> GetUserRoles(Guid userId, CancellationToken cancellationToken);
+    Task<PagedResult<UserListItemDto>> SearchAsync(UserFilter filter, CancellationToken cancellationToken = default);
 
-    }
+    Task<UserDetailDto?> GetByIdAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    Task<UserDetailDto?> GetByEmailAsync(string email, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Loads the password hash for sign-in and password reset. The only query that exposes
+    /// it — everything user-facing uses <see cref="UserDetailDto"/>, which omits it.
+    /// </summary>
+    Task<UserCredentialsDto?> GetCredentialsByEmailAsync(string email, CancellationToken cancellationToken = default);
+
+    Task<UserCredentialsDto?> GetCredentialsByIdAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    Task<bool> EmailExistsAsync(string email, Guid? excludingUserId = null, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyCollection<Guid>> GetRoleIdsAsync(Guid userId, CancellationToken cancellationToken = default);
 }

@@ -2,7 +2,11 @@ using System.ComponentModel.DataAnnotations;
 
 namespace Barkfield.Administration.API.Models.Requests.Users;
 
-public class CreateUserRequest
+/// <summary>
+/// The user id comes from the route. Passwords are not changed here — a user changes their
+/// own through change-password, and a forgotten one goes through the reset flow.
+/// </summary>
+public class UpdateUserRequest
 {
     [Required, MaxLength(200)]
     public string Name { get; set; } = string.Empty;
@@ -10,16 +14,8 @@ public class CreateUserRequest
     [Required, EmailAddress, MaxLength(256)]
     public string Email { get; set; } = string.Empty;
 
-    [Required, MinLength(12), MaxLength(128)]
-    public string Password { get; set; } = string.Empty;
-
-    /// <summary>At least one role is required — a user with none cannot do anything.</summary>
     [Required, MinLength(1)]
     public IEnumerable<Guid> RoleIds { get; set; } = [];
 
-    /// <summary>
-    /// Grants the blanket administrator flag, which bypasses every permission check.
-    /// Deliberately separate from roles.
-    /// </summary>
     public bool IsAdmin { get; set; }
 }
