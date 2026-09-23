@@ -1,27 +1,61 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace Barkfield.Administration.Domain.Entities.Identity.Constants;
 
-namespace Barkfield.Administration.Domain.Entities.Identity.Constants
+/// <summary>
+/// Permission keys used by <c>[RequirePermission]</c>. Every value here must exist as a row in
+/// the Permissions table — the seed script is the source of truth for that.
+/// </summary>
+/// <remarks>
+/// Format is <c>area:action</c>, lower case. Add a constant and a seed row together.
+/// </remarks>
+public static class Permissions
 {
-    public static class Permissions
+    public static class Users
     {
-        public static class Users
-        {
-            public const string Create = "user:create";
-            public const string Delete = "user:delete";
-        }
+        public const string View = "user:view";
+        public const string Create = "user:create";
+        public const string Edit = "user:edit";
+        public const string Delete = "user:delete";
+    }
 
-        public static class Square
-        {
-            public const string CreateCart = "square:createcart";
-            
-        }
+    public static class Customers
+    {
+        public const string View = "customer:view";
+        public const string Create = "customer:create";
+        public const string Edit = "customer:edit";
+        public const string Delete = "customer:delete";
+    }
 
-        public static class Customers
-        {
-            public const string Create = "customer:create";
-        }
+    public static class Products
+    {
+        public const string View = "product:view";
+        public const string Manage = "product:manage";
+    }
 
+    public static class Subscriptions
+    {
+        public const string View = "subscription:view";
+        public const string Manage = "subscription:manage";
+    }
+
+    public static class Deliveries
+    {
+        public const string View = "delivery:view";
+        public const string Manage = "delivery:manage";
+
+        /// <summary>Toggling per-item stock status on the packing screen.</summary>
+        public const string Pack = "delivery:pack";
+    }
+
+    public static class Dispatch
+    {
+        public const string View = "dispatch:view";
+
+        /// <summary>Sending the day's orders to the routing provider.</summary>
+        public const string Send = "dispatch:send";
+    }
+
+    public static class Square
+    {
+        public const string CreateCart = "square:createcart";
     }
 }

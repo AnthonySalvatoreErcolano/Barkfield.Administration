@@ -1,13 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
+namespace Barkfield.Administration.Domain.Entities.Identity.Roles;
 
-namespace Barkfield.Administration.Domain.Entities.Identity.Roles
+/// <summary>
+/// Grants one permission to one role.
+/// </summary>
+public class RolePermission
 {
-    public class RolePermission
-    {
-
-        public int RoleId { get; set; }
-        public int PermissionId { get; set; }
-    }
+    public Guid RoleId { get; set; }
+    public int PermissionId { get; set; }
 }
