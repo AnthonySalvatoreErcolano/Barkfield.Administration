@@ -1,6 +1,7 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Allergies;
 using Barkfield.Administration.Application.DataAccess.Customers;
 using Barkfield.Administration.Application.DataAccess.Pets;
+using Barkfield.Administration.Application.DataAccess.Products;
 using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
 using Barkfield.Administration.Application.DataAccess.Identity.Roles;
 using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
@@ -12,6 +13,7 @@ using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.DataAccess.Allergies;
 using Barkfield.Administration.Infrastructure.DataAccess.Customers;
 using Barkfield.Administration.Infrastructure.DataAccess.Pets;
+using Barkfield.Administration.Infrastructure.DataAccess.Products;
 using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Roles;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Tokens;
@@ -42,16 +44,6 @@ namespace Barkfield.Administration.Infrastructure
 
             services.ConfigureSquare(configuration);
             services.ConfigureIdentity(configuration);
-
-
-            //services.AddHttpClient<ISquareCatalogService, SquareCatalogServiceGateway>(client =>
-            //{
-            //    client.BaseAddress = new Uri(baseAddress);
-            //    client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            //    client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", squareAccessToken);
-            //    client.DefaultRequestHeaders.Add("Square-Version", "2026-06-23"); // Keeps compliance locked to API timeline rules
-            //});
-
 
             services.AddSingleton<ISqlConnectionFactory>(new SqlConnectionFactory(connectionString));
             services.AddScoped<ISqlExecutor, SqlExecutor>();
@@ -86,6 +78,9 @@ namespace Barkfield.Administration.Infrastructure
             services.AddScoped<ICustomerQueries, CustomerQueries>();
             services.AddScoped<ICustomerCommands, CustomerCommands>();
 
+            services.AddScoped<IProductQueries, ProductQueries>();
+            services.AddScoped<IProductCommands, ProductCommands>();
+
             services.AddScoped<IPetQueries, PetQueries>();
             services.AddScoped<IPetCommands, PetCommands>();
             services.AddScoped<IAllergyQueries, AllergyQueries>();
@@ -116,6 +111,7 @@ namespace Barkfield.Administration.Infrastructure
             });
 
             services.AddScoped<ISquareService, SquareService>();
+            services.AddScoped<ISquareCatalogService, SquareCatalogService>();
         }
     }
 }
