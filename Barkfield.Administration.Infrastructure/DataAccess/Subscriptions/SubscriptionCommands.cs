@@ -101,9 +101,15 @@ public class SubscriptionCommands : ISubscriptionCommands
              WHERE Id = @Id
                AND Revision = @ExpectedRevision;
 
+            /*  Conflict: the head update matched nothing, so nothing has been modified and there
+                is nothing to undo. COMMIT rather than ROLLBACK, because an unnamed ROLLBACK
+                rolls back to the OUTERMOST transaction — inside a caller's transaction scope
+                that would silently destroy their work and leave their COMMIT to fail with a
+                mismatched transaction count. Committing a transaction that changed nothing is a
+                no-op, and it balances the BEGIN above at either nesting level. */
             IF @@ROWCOUNT = 0
             BEGIN
-                ROLLBACK TRANSACTION;
+                COMMIT TRANSACTION;
                 SELECT CAST(0 AS INT);
                 RETURN;
             END
