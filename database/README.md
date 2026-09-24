@@ -118,5 +118,17 @@ few million rows.
 It is legal, and it matches the `INSERT` already written in `SqlExecutor.ExecuteWithAudit`,
 so it stays as-is.
 
-**`TimeOnly` mapping** relies on Dapper 2.1+ handling `TIME` ↔ `TimeOnly`. If a query
-returns a `TimeOnly` as null unexpectedly, check the Dapper version before the SQL.
+**`TimeOnly` needs a Dapper type handler, and the application registers one.** Dapper
+2.1.79 reads a `TIME` into a `TimeOnly` happily but refuses to send one back as a
+parameter — *"cannot be used as a parameter value"*. So every write touching a time
+window fails at runtime while the read path looks perfectly healthy, which is exactly how
+it was found. `DapperTypeHandlers` covers both directions and is registered from
+`SqlExecutor`'s static constructor so it cannot be bypassed. Don't work around it per
+call site.
+
+**`DateTime` parameters arrive as `DATETIME`, not `DATETIME2`.** SqlClient infers
+`SqlDbType.DateTime` for a .NET `DateTime`, and that type's granularity is ~3.33 ms — so a
+value read out of a `DATETIME2(3)` column does **not** compare equal to itself when sent
+straight back. Range comparisons and `DATE` columns are unaffected; equality on a
+timestamp is not. That is why `Subscriptions.Revision` exists instead of an
+`UpdatedAt` concurrency check.

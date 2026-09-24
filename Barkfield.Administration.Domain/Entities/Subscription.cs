@@ -31,6 +31,17 @@ public class Subscription
 
     public Guid Id { get; private set; }
     public Guid CustomerId { get; private set; }
+
+    /// <summary>
+    /// Staff-given name, e.g. "Raw food". Null is normal.
+    /// </summary>
+    /// <remarks>
+    /// A customer may hold several subscriptions on different cadences, so staff need to tell
+    /// them apart before attaching an add-on to one. When this is blank,
+    /// <see cref="DisplayName"/> derives something usable instead of showing two identical rows.
+    /// </remarks>
+    public string? Name { get; private set; }
+
     public SubscriptionStatus Status { get; private set; }
     public OrderFrequency Frequency { get; private set; } = null!;
     public FulfillmentMethod FulfillmentMethod { get; private set; }
@@ -38,6 +49,16 @@ public class Subscription
     public DateTime NextDeliveryDate { get; private set; }
     public DateTime? LastDeliveryDate { get; private set; }
     public DateTime SignUpDate { get; private set; }
+
+    /// <summary>
+    /// The date a paused subscription is due back, or null for an open-ended pause.
+    /// </summary>
+    /// <remarks>
+    /// This is data, not a trigger — nothing in the application wakes up to act on it. Delivery
+    /// generation is what honours it; until then it is a date staff can see and filter on.
+    /// Only meaningful while <see cref="Status"/> is <see cref="SubscriptionStatus.Paused"/>.
+    /// </remarks>
+    public DateTime? PausedUntil { get; private set; }
 
     public DateTime CreatedAt { get; private set; }
     public DateTime? UpdatedAt { get; private set; }
@@ -59,13 +80,22 @@ public class Subscription
     public bool HasNothingScheduled =>
         _items.Count == 0 && !_rotationGroups.Any(g => g.IsActive);
 
+    /// <summary>True when a dated pause has run out. Delivery generation resumes these.</summary>
+    public bool IsPauseExpired =>
+        Status == SubscriptionStatus.Paused && PausedUntil is not null && PausedUntil.Value.Date <= DateTime.UtcNow.Date;
+
+    /// <summary>What to show staff: the given name, or one derived from cadence and contents.</summary>
+    public string DisplayName =>
+        ComposeDisplayName(Name, Frequency, _items.Count, _rotationGroups.Count);
+
     private Subscription() { }
 
     public static Subscription Create(
         Guid customerId,
         OrderFrequency frequency,
         DateTime firstDeliveryDate,
-        FulfillmentMethod fulfillmentMethod = FulfillmentMethod.LocalDelivery)
+        FulfillmentMethod fulfillmentMethod = FulfillmentMethod.LocalDelivery,
+        string? name = null)
     {
         if (customerId == Guid.Empty)
             throw new DomainException("A valid CustomerId is required.");
@@ -79,6 +109,7 @@ public class Subscription
         {
             Id = Guid.NewGuid(),
             CustomerId = customerId,
+            Name = NormalizeName(name),
             Status = SubscriptionStatus.NewSignUp,
             Frequency = frequency,
             FulfillmentMethod = fulfillmentMethod,
@@ -88,15 +119,44 @@ public class Subscription
         };
     }
 
+    /// <summary>
+    /// Builds the label staff see for a subscription.
+    /// </summary>
+    /// <remarks>
+    /// The fallback matters because a customer with two subscriptions and no names would show
+    /// two identical rows in a picker, and choosing the wrong one puts an add-on in the wrong
+    /// box. Cadence plus a content summary is enough to tell them apart:
+    /// "every 4 weeks · 3 items, 1 rotation".
+    /// </remarks>
+    public static string ComposeDisplayName(
+        string? name,
+        OrderFrequency frequency,
+        int itemCount,
+        int rotationGroupCount)
+    {
+        if (!string.IsNullOrWhiteSpace(name)) return name.Trim();
+
+        string cadence = frequency?.ToString() ?? "no cadence set";
+
+        var parts = new List<string>(2);
+
+        if (itemCount > 0) parts.Add($"{itemCount} item{(itemCount == 1 ? "" : "s")}");
+        if (rotationGroupCount > 0) parts.Add($"{rotationGroupCount} rotation{(rotationGroupCount == 1 ? "" : "s")}");
+
+        return parts.Count == 0 ? cadence : $"{cadence} · {string.Join(", ", parts)}";
+    }
+
     public static Subscription FromDto(
         Guid id,
         Guid customerId,
+        string? name,
         SubscriptionStatus status,
         OrderFrequency frequency,
         FulfillmentMethod fulfillmentMethod,
         DateTime nextDeliveryDate,
         DateTime? lastDeliveryDate,
         DateTime signUpDate,
+        DateTime? pausedUntil,
         DateTime createdAt,
         DateTime? updatedAt,
         IEnumerable<SubscriptionItem>? items = null,
@@ -112,6 +172,8 @@ public class Subscription
         {
             Id = id,
             CustomerId = customerId,
+            Name = name,
+            PausedUntil = pausedUntil,
             Status = status,
             Frequency = frequency,
             FulfillmentMethod = fulfillmentMethod,
@@ -374,15 +436,28 @@ public class Subscription
             throw new DomainException("A subscription needs at least one item or active rotation group before it can be activated.");
 
         Status = SubscriptionStatus.Active;
+        PausedUntil = null;
         Touch();
     }
 
-    public void Pause()
+    /// <summary>
+    /// Halts deliveries, either open-endedly or until a given date.
+    /// </summary>
+    /// <param name="resumeOn">
+    /// The date the subscription is due back, or null to pause indefinitely. A dated pause is
+    /// the vacation case; an open-ended one relies on someone remembering, which is why the
+    /// date exists at all.
+    /// </param>
+    public void Pause(DateTime? resumeOn = null)
     {
         if (Status == SubscriptionStatus.Canceled)
             throw new DomainException("A canceled subscription cannot be paused.");
 
+        if (resumeOn is not null && resumeOn.Value.Date <= DateTime.UtcNow.Date)
+            throw new DomainException("A pause must end on a future date.");
+
         Status = SubscriptionStatus.Paused;
+        PausedUntil = resumeOn?.Date;
         Touch();
     }
 
@@ -392,6 +467,7 @@ public class Subscription
             throw new DomainException("Only a paused subscription can be resumed.");
 
         Status = SubscriptionStatus.Active;
+        PausedUntil = null;
 
         // A subscription paused across its delivery date would otherwise resume in the past.
         if (NextDeliveryDate < DateTime.UtcNow.Date)
@@ -402,9 +478,23 @@ public class Subscription
         Touch();
     }
 
+    /// <summary>
+    /// Ends the subscription for good. Irreversible: a customer who comes back gets a new one,
+    /// so this subscription's history stays a closed record of what it was.
+    /// </summary>
     public void Cancel()
     {
         Status = SubscriptionStatus.Canceled;
+        PausedUntil = null;
+        Touch();
+    }
+
+    /// <summary>
+    /// Sets or clears the staff-given name. Blank falls back to the derived display name.
+    /// </summary>
+    public void Rename(string? name)
+    {
+        Name = NormalizeName(name);
         Touch();
     }
 
@@ -433,6 +523,16 @@ public class Subscription
         }
 
         return new DeliveryManifest(deliveryDate, lines);
+    }
+
+    private static string? NormalizeName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+
+        if (name.Trim().Length > 100)
+            throw new DomainException("Subscription name cannot exceed 100 characters.");
+
+        return name.Trim();
     }
 
     private void EnsureEditable()

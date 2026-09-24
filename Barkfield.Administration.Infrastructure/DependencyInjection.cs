@@ -2,6 +2,7 @@
 using Barkfield.Administration.Application.DataAccess.Customers;
 using Barkfield.Administration.Application.DataAccess.Pets;
 using Barkfield.Administration.Application.DataAccess.Products;
+using Barkfield.Administration.Application.DataAccess.Subscriptions;
 using Barkfield.Administration.Application.DataAccess.Identity.RefreshTokens;
 using Barkfield.Administration.Application.DataAccess.Identity.Roles;
 using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
@@ -14,6 +15,7 @@ using Barkfield.Administration.Infrastructure.DataAccess.Allergies;
 using Barkfield.Administration.Infrastructure.DataAccess.Customers;
 using Barkfield.Administration.Infrastructure.DataAccess.Pets;
 using Barkfield.Administration.Infrastructure.DataAccess.Products;
+using Barkfield.Administration.Infrastructure.DataAccess.Subscriptions;
 using Barkfield.Administration.Infrastructure.DataAccess.RefreshTokens;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Roles;
 using Barkfield.Administration.Infrastructure.DataAccess.Identity.Tokens;
@@ -77,6 +79,9 @@ namespace Barkfield.Administration.Infrastructure
         {
             services.AddScoped<ICustomerQueries, CustomerQueries>();
             services.AddScoped<ICustomerCommands, CustomerCommands>();
+
+            services.AddScoped<ISubscriptionQueries, SubscriptionQueries>();
+            services.AddScoped<ISubscriptionCommands, SubscriptionCommands>();
 
             services.AddScoped<IProductQueries, ProductQueries>();
             services.AddScoped<IProductCommands, ProductCommands>();

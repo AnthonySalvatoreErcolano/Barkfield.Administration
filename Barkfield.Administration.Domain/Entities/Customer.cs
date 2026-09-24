@@ -10,6 +10,9 @@ namespace Barkfield.Administration.Domain.Entities
 {
     public class Customer
     {
+        /// <summary>Fallback stop duration when none is set, in minutes.</summary>
+        public const int DefaultServiceDurationMinutes = 5;
+
         // Aggregate Identifier
         public Guid Id { get; private set; }
 
@@ -23,7 +26,29 @@ namespace Barkfield.Administration.Domain.Entities
         public string? Notes { get; private set; }
         public Address? Address { get; private set; }
 
+        /// <summary>
+        /// Set when a routing provider returns coordinates for the address. Not required —
+        /// Routific geocodes from the address string.
+        /// </summary>
+        public GeoPoint? Coordinates { get; private set; }
+
+        /// <summary>Driver-facing instructions — gate codes, "leave at side door", "dog in yard".</summary>
+        public string? AccessNotes { get; private set; }
+
+        /// <summary>How long the stop takes. Sent as the routing order's service duration.</summary>
+        public int ServiceDurationMinutes { get; private set; } = DefaultServiceDurationMinutes;
+
+        /// <summary>The customer's preferred delivery window, if any.</summary>
+        public TimeWindow? PreferredWindow { get; private set; }
+
         public string FullName => $"{FirstName} {LastName}".Trim();
+
+        /// <summary>
+        /// True when there is enough here to route a stop to. Pickup customers legitimately
+        /// have no address, so this is checked when a local delivery is scheduled rather than
+        /// enforced on the customer itself.
+        /// </summary>
+        public bool CanReceiveLocalDelivery => Address is not null;
 
         /// <summary>
         /// False once deactivated. Customers are never hard-deleted — delivery history
@@ -83,7 +108,11 @@ namespace Barkfield.Administration.Domain.Entities
             string? squareCustomerId,
             bool isActive,
             DateTime createdAt,
-            DateTime? updatedAt)
+            DateTime? updatedAt,
+            GeoPoint? coordinates = null,
+            string? accessNotes = null,
+            int serviceDurationMinutes = DefaultServiceDurationMinutes,
+            TimeWindow? preferredWindow = null)
         {
             if (id == Guid.Empty)
                 throw new DomainException("Invalid customer ID.");
@@ -97,6 +126,10 @@ namespace Barkfield.Administration.Domain.Entities
                 PhoneNumber = phoneNumber,
                 Notes = notes,
                 Address = address,
+                Coordinates = coordinates,
+                AccessNotes = accessNotes,
+                ServiceDurationMinutes = serviceDurationMinutes,
+                PreferredWindow = preferredWindow,
                 SquareCustomerId = squareCustomerId,
                 IsActive = isActive,
                 CreatedAt = createdAt,
@@ -167,9 +200,44 @@ namespace Barkfield.Administration.Domain.Entities
         /// <summary>
         /// Updates the physical or billing address for the customer.
         /// </summary>
+        /// <remarks>
+        /// Coordinates are cleared, because they describe the address that was just replaced.
+        /// Routing will geocode the new one on its next pass; a stale coordinate would send a
+        /// driver confidently to the wrong house.
+        /// </remarks>
         public void UpdateAddress(Address? newAddress)
         {
             Address = newAddress;
+            Coordinates = null;
+            UpdatedAt = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Updates the driver-facing detail for this customer's stop: access notes, how long
+        /// the stop takes, and the window they prefer.
+        /// </summary>
+        /// <remarks>
+        /// Separate from <see cref="Update"/> because this is operational information the
+        /// dispatch side maintains, not part of the customer's identity. It also means the
+        /// customer edit form cannot wipe a gate code by omitting it.
+        /// </remarks>
+        public void UpdateDeliveryDetails(
+            string? accessNotes,
+            int? serviceDurationMinutes = null,
+            TimeWindow? preferredWindow = null)
+        {
+            AccessNotes = string.IsNullOrWhiteSpace(accessNotes) ? null : accessNotes.Trim();
+            ServiceDurationMinutes = ValidateServiceDuration(serviceDurationMinutes ?? ServiceDurationMinutes);
+            PreferredWindow = preferredWindow;
+            UpdatedAt = DateTime.UtcNow;
+        }
+
+        /// <summary>
+        /// Records coordinates handed back by a routing provider.
+        /// </summary>
+        public void SetCoordinates(GeoPoint? coordinates)
+        {
+            Coordinates = coordinates;
             UpdatedAt = DateTime.UtcNow;
         }
 
@@ -199,6 +267,14 @@ namespace Barkfield.Administration.Domain.Entities
 
             if (!Regex.IsMatch(email.Trim(), @"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.IgnoreCase))
                 throw new DomainException("Invalid email address format.");
+        }
+
+        private static int ValidateServiceDuration(int minutes)
+        {
+            if (minutes is < 0 or > 480)
+                throw new DomainException("Service duration must be between 0 and 480 minutes.");
+
+            return minutes;
         }
 
         private static string? NormalizePhoneNumber(string? phoneNumber)

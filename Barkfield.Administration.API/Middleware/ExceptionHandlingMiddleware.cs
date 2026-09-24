@@ -74,6 +74,10 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
 
         NotFoundException => (StatusCodes.Status404NotFound, exception.Message),
 
+        // The record moved underneath the write. Reloading and repeating the action fixes it,
+        // so the message is returned rather than hidden behind a generic failure.
+        ConflictException => (StatusCodes.Status409Conflict, exception.Message),
+
         NotSupportedException => (StatusCodes.Status501NotImplemented, exception.Message),
 
         ExternalServiceException => (StatusCodes.Status502BadGateway,
@@ -93,6 +97,7 @@ file static class StatusCodes
 {
     public const int Status400BadRequest = Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest;
     public const int Status404NotFound = Microsoft.AspNetCore.Http.StatusCodes.Status404NotFound;
+    public const int Status409Conflict = Microsoft.AspNetCore.Http.StatusCodes.Status409Conflict;
     public const int Status500InternalServerError = Microsoft.AspNetCore.Http.StatusCodes.Status500InternalServerError;
     public const int Status501NotImplemented = Microsoft.AspNetCore.Http.StatusCodes.Status501NotImplemented;
     public const int Status502BadGateway = Microsoft.AspNetCore.Http.StatusCodes.Status502BadGateway;

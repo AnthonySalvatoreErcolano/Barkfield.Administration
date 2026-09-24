@@ -177,6 +177,9 @@ public class CustomerQueries : ICustomerQueries
                 c.Id, c.SquareCustomerId, c.Email, c.FirstName, c.LastName,
                 c.PhoneNumber, c.Notes,
                 c.Street, c.City, c.State, c.ZipCode,
+                c.AccessNotes, c.ServiceDurationMinutes,
+                c.PreferredWindowStart, c.PreferredWindowEnd,
+                c.Latitude, c.Longitude,
                 c.IsActive, c.CreatedAt, c.UpdatedAt
             FROM dbo.Customers c
             WHERE {predicate};

@@ -58,14 +58,17 @@ public class Delivery
     /// <summary>Set when this delivery was pushed to the routing provider for planning.</summary>
     public DateTime? SentToRoutingAt { get; private set; }
 
-    /// <summary>The customer location this delivery goes to.</summary>
-    public Guid DeliveryLocationId { get; private set; }
-
     /// <summary>
     /// Address as it was when the delivery was scheduled. Snapshotted for the same reason line
     /// items snapshot product name and price: a customer moving house must not rewrite where
     /// last month's delivery went.
     /// </summary>
+    /// <remarks>
+    /// This snapshot is the whole mechanism protecting delivery history. There is deliberately
+    /// no reference to a separate location record — a delivery always goes to the customer's
+    /// own address, and holding a second copy of it elsewhere would only create two versions
+    /// of the truth to keep in step.
+    /// </remarks>
     public Address DeliveryAddress { get; private set; } = null!;
 
     /// <summary>Coordinates as snapshotted at scheduling time. What the optimiser routes to.</summary>
@@ -111,29 +114,28 @@ public class Delivery
     /// The products referenced by the manifest, keyed by product id. The caller resolves these;
     /// the domain does not read from storage.
     /// </param>
-    /// <param name="location">
-    /// Where this delivery goes. Its address and coordinates are snapshotted onto the delivery.
+    /// <param name="customer">
+    /// Who this is for. Their address, coordinates and preferred window are snapshotted onto
+    /// the delivery — a delivery always goes to the customer's own address.
     /// </param>
     public static Delivery Schedule(
         Guid subscriptionId,
-        Guid customerId,
         DeliveryManifest manifest,
         FulfillmentMethod fulfillmentMethod,
         IReadOnlyDictionary<Guid, Product> catalog,
-        DeliveryLocation location)
+        Customer customer)
     {
         if (subscriptionId == Guid.Empty)
             throw new DomainException("A delivery must belong to a valid subscription.");
 
-        if (customerId == Guid.Empty)
-            throw new DomainException("A delivery must belong to a valid customer.");
-
         ArgumentNullException.ThrowIfNull(manifest);
         ArgumentNullException.ThrowIfNull(catalog);
-        ArgumentNullException.ThrowIfNull(location);
+        ArgumentNullException.ThrowIfNull(customer);
 
-        if (location.CustomerId != customerId)
-            throw new DomainException("The delivery location belongs to a different customer.");
+        // Pickup and shipping legitimately need no address; a driven route cannot happen
+        // without one, and finding that out on the van is too late.
+        if (fulfillmentMethod == FulfillmentMethod.LocalDelivery && !customer.CanReceiveLocalDelivery)
+            throw new DomainException($"{customer.FullName} has no address on file, so a local delivery cannot be scheduled.");
 
         manifest.EnsureNotEmpty();
 
@@ -141,15 +143,14 @@ public class Delivery
         {
             Id = Guid.NewGuid(),
             SubscriptionId = subscriptionId,
-            CustomerId = customerId,
+            CustomerId = customer.Id,
             ScheduledFor = manifest.DeliveryDate.Date,
             Status = DeliveryStatus.Scheduled,
             FulfillmentMethod = fulfillmentMethod,
             ProcurementStatus = ProcurementStatus.NotStarted,
-            DeliveryLocationId = location.Id,
-            DeliveryAddress = location.Address,
-            DeliveryCoordinates = location.Coordinates,
-            RequestedWindow = location.PreferredWindow,
+            DeliveryAddress = customer.Address ?? new Address(string.Empty, string.Empty, string.Empty, string.Empty),
+            DeliveryCoordinates = customer.Coordinates,
+            RequestedWindow = customer.PreferredWindow,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -184,7 +185,6 @@ public class Delivery
         bool astroCompleted,
         string? externalOrderId,
         DateTime? sentToRoutingAt,
-        Guid deliveryLocationId,
         Address deliveryAddress,
         GeoPoint? deliveryCoordinates,
         TimeWindow? requestedWindow,
@@ -212,7 +212,6 @@ public class Delivery
             AstroCompleted = astroCompleted,
             ExternalOrderId = externalOrderId,
             SentToRoutingAt = sentToRoutingAt,
-            DeliveryLocationId = deliveryLocationId,
             DeliveryAddress = deliveryAddress,
             DeliveryCoordinates = deliveryCoordinates,
             RequestedWindow = requestedWindow,

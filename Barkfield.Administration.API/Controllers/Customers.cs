@@ -241,6 +241,37 @@ public class CustomersController(ICustomerQueries customerQueries, CustomerServi
     }
 
     /// <summary>
+    /// Updates the driver-facing detail for this customer's stop: access notes, how long the
+    /// stop takes, and the window they prefer.
+    /// </summary>
+    /// <remarks>
+    /// A delivery always goes to the customer's own address, so this is where a gate code or a
+    /// stop duration lives. All of it feeds the routing provider when the delivery is dispatched.
+    /// </remarks>
+    /// <response code="400">A window was given with only one end, or ends at or before it starts.</response>
+    [HttpPut("{customerId:guid}/delivery-details")]
+    [RequirePermission(Permissions.Customers.Edit)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdateDeliveryDetails(
+        [FromRoute] Guid customerId,
+        [FromBody] UpdateDeliveryDetailsRequest request,
+        CancellationToken cancellationToken)
+    {
+        await _customerService.UpdateDeliveryDetailsAsync(
+            customerId,
+            request.AccessNotes,
+            request.ServiceDurationMinutes,
+            request.PreferredWindowStart,
+            request.PreferredWindowEnd,
+            cancellationToken);
+
+        return NoContent();
+    }
+
+    /// <summary>
     /// Builds the Address value object, or null when no address fields were supplied.
     /// </summary>
     private static Address? BuildAddress(string? street, string? city, string? state, string? zipCode)

@@ -38,6 +38,16 @@ public class SqlExecutor : ISqlExecutor
     private readonly ISqlConnectionFactory _connectionFactory;
     private readonly ILogger<SqlExecutor> _logger;
 
+    /// <summary>
+    /// Registers the Dapper type handlers the application depends on.
+    /// </summary>
+    /// <remarks>
+    /// Here rather than in DI because Dapper's handler table is global static state and this
+    /// type is the only gateway to the database. Tying registration to it means nothing can
+    /// reach SQL Server without the handlers, including the bootstrap command.
+    /// </remarks>
+    static SqlExecutor() => DapperTypeHandlers.Register();
+
     public SqlExecutor(ILogger<SqlExecutor> logger, ISqlConnectionFactory connectionFactory)
     {
         _connectionFactory = connectionFactory;

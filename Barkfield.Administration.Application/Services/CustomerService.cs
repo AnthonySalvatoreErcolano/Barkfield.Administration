@@ -251,6 +251,20 @@ public class CustomerService
                 dto.ZipCode ?? string.Empty);
         }
 
+        TimeWindow? preferredWindow = null;
+
+        if (dto.PreferredWindowStart is not null && dto.PreferredWindowEnd is not null)
+        {
+            preferredWindow = TimeWindow.Create(dto.PreferredWindowStart.Value, dto.PreferredWindowEnd.Value);
+        }
+
+        GeoPoint? coordinates = null;
+
+        if (dto.Latitude is not null && dto.Longitude is not null)
+        {
+            coordinates = GeoPoint.Create((double)dto.Latitude.Value, (double)dto.Longitude.Value);
+        }
+
         return Customer.FromDto(
             dto.Id,
             dto.FirstName,
@@ -262,6 +276,49 @@ public class CustomerService
             dto.SquareCustomerId,
             dto.IsActive,
             dto.CreatedAt,
-            dto.UpdatedAt);
+            dto.UpdatedAt,
+            coordinates,
+            dto.AccessNotes,
+            dto.ServiceDurationMinutes,
+            preferredWindow);
+    }
+
+    /// <summary>
+    /// Updates the driver-facing detail for a customer's stop.
+    /// </summary>
+    /// <remarks>
+    /// Separate from the customer edit because this is operational information dispatch
+    /// maintains — and because routing it through the edit form would let a form that does not
+    /// collect a gate code silently clear one.
+    /// </remarks>
+    public async Task UpdateDeliveryDetailsAsync(
+        Guid customerId,
+        string? accessNotes,
+        int? serviceDurationMinutes,
+        TimeOnly? preferredWindowStart,
+        TimeOnly? preferredWindowEnd,
+        CancellationToken cancellationToken = default)
+    {
+        CustomerDetailDto dto = await _customerQueries.GetByIdAsync(customerId, cancellationToken)
+            ?? throw new NotFoundException($"Customer with ID '{customerId}' was not found.");
+
+        Customer customer = Rehydrate(dto);
+
+        TimeWindow? window = null;
+
+        if (preferredWindowStart is not null || preferredWindowEnd is not null)
+        {
+            if (preferredWindowStart is null || preferredWindowEnd is null)
+            {
+                throw new ValidationException("A delivery window needs both a start and an end time.");
+            }
+
+            // TimeWindow.Create rejects an end at or before the start, which surfaces as a 400.
+            window = TimeWindow.Create(preferredWindowStart.Value, preferredWindowEnd.Value);
+        }
+
+        customer.UpdateDeliveryDetails(accessNotes, serviceDurationMinutes, window);
+
+        await _customerCommands.UpdateAsync(customer, cancellationToken);
     }
 }

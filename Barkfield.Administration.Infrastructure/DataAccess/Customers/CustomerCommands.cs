@@ -20,10 +20,14 @@ public class CustomerCommands : ICustomerCommands
         const string sql = @"
             INSERT INTO dbo.Customers
                 (Id, SquareCustomerId, Email, FirstName, LastName, PhoneNumber, Notes,
-                 Street, City, State, ZipCode, IsActive, CreatedAt)
+                 Street, City, State, ZipCode,
+                 AccessNotes, ServiceDurationMinutes, PreferredWindowStart, PreferredWindowEnd,
+                 Latitude, Longitude, IsActive, CreatedAt)
             VALUES
                 (@Id, @SquareCustomerId, @Email, @FirstName, @LastName, @PhoneNumber, @Notes,
-                 @Street, @City, @State, @ZipCode, @IsActive, @CreatedAt);";
+                 @Street, @City, @State, @ZipCode,
+                 @AccessNotes, @ServiceDurationMinutes, @PreferredWindowStart, @PreferredWindowEnd,
+                 @Latitude, @Longitude, @IsActive, @CreatedAt);";
 
         await _sqlExecutor.ExecuteAsync(sql, ToParameters(customer), cancellationToken);
     }
@@ -34,19 +38,30 @@ public class CustomerCommands : ICustomerCommands
 
         // SquareCustomerId is deliberately absent: the Square link is managed only by
         // LinkSquareCustomerAsync, so an edit cannot silently repoint a customer.
+        //
+        // The routing columns ARE written here even though the edit form does not collect them,
+        // because the entity was loaded carrying them and writes back what it holds. Leaving
+        // them out of this statement would be safe; leaving them out of the SELECT that loads
+        // the customer would not, which is why both sides list them.
         const string sql = @"
             UPDATE dbo.Customers
-               SET Email       = @Email,
-                   FirstName   = @FirstName,
-                   LastName    = @LastName,
-                   PhoneNumber = @PhoneNumber,
-                   Notes       = @Notes,
-                   Street      = @Street,
-                   City        = @City,
-                   State       = @State,
-                   ZipCode     = @ZipCode,
-                   IsActive    = @IsActive,
-                   UpdatedAt   = @UpdatedAt
+               SET Email                  = @Email,
+                   FirstName              = @FirstName,
+                   LastName               = @LastName,
+                   PhoneNumber            = @PhoneNumber,
+                   Notes                  = @Notes,
+                   Street                 = @Street,
+                   City                   = @City,
+                   State                  = @State,
+                   ZipCode                = @ZipCode,
+                   AccessNotes            = @AccessNotes,
+                   ServiceDurationMinutes = @ServiceDurationMinutes,
+                   PreferredWindowStart   = @PreferredWindowStart,
+                   PreferredWindowEnd     = @PreferredWindowEnd,
+                   Latitude               = @Latitude,
+                   Longitude              = @Longitude,
+                   IsActive               = @IsActive,
+                   UpdatedAt              = @UpdatedAt
              WHERE Id = @Id;";
 
         await _sqlExecutor.ExecuteAsync(sql, ToParameters(customer), cancellationToken);
@@ -89,7 +104,8 @@ public class CustomerCommands : ICustomerCommands
     }
 
     /// <summary>
-    /// Flattens the aggregate into SQL parameters, unpacking the Address value object.
+    /// Flattens the aggregate into SQL parameters, unpacking the Address, TimeWindow and
+    /// GeoPoint value objects.
     /// </summary>
     private static object ToParameters(Customer customer) => new
     {
@@ -104,6 +120,15 @@ public class CustomerCommands : ICustomerCommands
         City = customer.Address?.City,
         State = customer.Address?.State,
         ZipCode = customer.Address?.ZipCode,
+        customer.AccessNotes,
+        customer.ServiceDurationMinutes,
+        PreferredWindowStart = customer.PreferredWindow?.Start,
+        PreferredWindowEnd = customer.PreferredWindow?.End,
+
+        // GeoPoint holds doubles; the column is DECIMAL(9,6). Cast here rather than letting
+        // Dapper infer a float parameter against a decimal column.
+        Latitude = (decimal?)customer.Coordinates?.Latitude,
+        Longitude = (decimal?)customer.Coordinates?.Longitude,
         customer.IsActive,
         customer.CreatedAt,
         customer.UpdatedAt
