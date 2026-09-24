@@ -461,17 +461,39 @@ public class Subscription
         Touch();
     }
 
+    /// <summary>
+    /// Returns a paused subscription to active service.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A dated pause resumes <b>on its date</b>. When a customer says "pause me for the summer,
+    /// I'm back on the first of September", that date is a promise about when food arrives —
+    /// pushing a cadence out from today instead would land them a month later than they asked for,
+    /// and nobody would notice until the phone rang.
+    /// </para>
+    /// <para>
+    /// An open-ended pause has no such date, so its next delivery is recalculated from today if
+    /// it was left behind in the past.
+    /// </para>
+    /// </remarks>
     public void Resume()
     {
         if (Status != SubscriptionStatus.Paused)
             throw new DomainException("Only a paused subscription can be resumed.");
 
+        DateTime? resumeOn = PausedUntil;
+
         Status = SubscriptionStatus.Active;
         PausedUntil = null;
 
-        // A subscription paused across its delivery date would otherwise resume in the past.
-        if (NextDeliveryDate < DateTime.UtcNow.Date)
+        if (resumeOn is not null)
         {
+            NextDeliveryDate = resumeOn.Value.Date;
+        }
+        else if (NextDeliveryDate < DateTime.UtcNow.Date)
+        {
+            // Paused across its delivery date with no return date agreed, so it would otherwise
+            // resume in the past.
             NextDeliveryDate = Frequency.CalculateNextDate(DateTime.UtcNow.Date).Date;
         }
 

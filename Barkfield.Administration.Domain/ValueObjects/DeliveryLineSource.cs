@@ -13,5 +13,15 @@ public enum DeliveryLineSource
     Rotation = 2,
 
     /// <summary>A one-time add-on that expires once the delivery completes.</summary>
-    AddOn = 3
+    AddOn = 3,
+
+    /// <summary>
+    /// Added to this delivery by hand, after it was created.
+    /// </summary>
+    /// <remarks>
+    /// The "she called and wants a bag added" case. A subscription add-on cannot serve it once
+    /// the delivery row exists, because an add-on targets whichever delivery is next. A manual
+    /// line came from a person, so it has no source row to point back at.
+    /// </remarks>
+    Manual = 4
 }

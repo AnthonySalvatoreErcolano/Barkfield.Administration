@@ -198,6 +198,27 @@ public class ProductQueries : IProductQueries
         return products.ToList();
     }
 
+    public async Task<IReadOnlyCollection<ProductDto>> GetByIdsAsync(
+        IEnumerable<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = productIds?.Where(id => id != Guid.Empty).Distinct().ToList() ?? [];
+
+        if (ids.Count == 0) return [];
+
+        // Inactive products are included deliberately: a delivery already referencing a
+        // discontinued product still has to be able to snapshot its name and price.
+        string sql = $@"
+            SELECT {SelectColumns},
+                   0 AS SubscriptionUsageCount
+            FROM dbo.Products p
+            WHERE p.Id IN @Ids;";
+
+        var products = await _sqlExecutor.QueryAsync<ProductDto>(sql, new { Ids = ids }, cancellationToken);
+
+        return products.ToList();
+    }
+
     public async Task<IReadOnlyCollection<ProductDto>> GetAllActiveAsync(CancellationToken cancellationToken = default)
     {
         // The usage count is skipped here. This backs the bulk sync, which reads the whole

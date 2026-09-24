@@ -31,8 +31,11 @@ public class DeliveryLine
     /// <summary>Why this product is on the delivery.</summary>
     public DeliveryLineSource Source { get; private set; }
 
-    /// <summary>The SubscriptionItem, RotationGroup or SubscriptionAddOn this line came from.</summary>
-    public Guid SourceId { get; private set; }
+    /// <summary>
+    /// The SubscriptionItem, RotationGroup or SubscriptionAddOn this line came from.
+    /// Null for a <see cref="DeliveryLineSource.Manual"/> line, which came from a person.
+    /// </summary>
+    public Guid? SourceId { get; private set; }
 
     // --- Procurement -------------------------------------------------------
 
@@ -85,7 +88,7 @@ public class DeliveryLine
         decimal unitPrice,
         int quantity,
         DeliveryLineSource source,
-        Guid sourceId)
+        Guid? sourceId)
     {
         if (deliveryId == Guid.Empty)
             throw new DomainException("A delivery line must belong to a valid delivery.");
@@ -95,6 +98,11 @@ public class DeliveryLine
 
         if (quantity <= 0)
             throw new DomainException("Quantity must be greater than zero.");
+
+        // Everything except a manual line has to say what put it in the box, so the delivery
+        // can still explain itself months later. The database carries the same constraint.
+        if (source != DeliveryLineSource.Manual && (sourceId is null || sourceId == Guid.Empty))
+            throw new DomainException($"A {source} delivery line must reference the record it came from.");
 
         return new DeliveryLine
         {
@@ -119,7 +127,7 @@ public class DeliveryLine
         decimal unitPrice,
         int quantity,
         DeliveryLineSource source,
-        Guid sourceId,
+        Guid? sourceId,
         LineOrderStatus orderStatus,
         int quantityReceived,
         Guid? substitutedWithProductId,
@@ -149,6 +157,25 @@ public class DeliveryLine
             StatusNote = statusNote,
             StatusUpdatedAt = statusUpdatedAt
         };
+    }
+
+    /// <summary>
+    /// Changes how much of this product is going out.
+    /// </summary>
+    /// <remarks>
+    /// Received units are reset, because the count no longer describes the new quantity — a line
+    /// raised from 1 to 3 is not "received" just because the first one is on the shelf.
+    /// </remarks>
+    internal void ChangeQuantity(int quantity)
+    {
+        if (quantity <= 0)
+            throw new DomainException("Quantity must be greater than zero.");
+
+        Quantity = quantity;
+        QuantityReceived = 0;
+        OrderStatus = LineOrderStatus.Pending;
+        ClearSubstitution();
+        Touch(null);
     }
 
     internal void MarkOrdered(string? note)

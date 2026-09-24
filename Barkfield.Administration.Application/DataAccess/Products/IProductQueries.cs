@@ -23,6 +23,14 @@ public interface IProductQueries
         IEnumerable<string> squareVariationIds,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Looks up several products by id, for the catalog dictionary a delivery needs when it
+    /// snapshots names and prices.
+    /// </summary>
+    Task<IReadOnlyCollection<ProductDto>> GetByIdsAsync(
+        IEnumerable<Guid> productIds,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Every active product, for the bulk re-sync.</summary>
     Task<IReadOnlyCollection<ProductDto>> GetAllActiveAsync(CancellationToken cancellationToken = default);
 }

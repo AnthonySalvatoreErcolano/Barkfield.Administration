@@ -29,7 +29,17 @@ public class Delivery
     private readonly List<DeliveryLine> _lines = [];
 
     public Guid Id { get; private set; }
-    public Guid SubscriptionId { get; private set; }
+
+    /// <summary>
+    /// The subscription this dispatch came from, or null for a one-off.
+    /// </summary>
+    /// <remarks>
+    /// A customer already in the system can ask for something on a day they are not scheduled
+    /// without touching their subscription. That is a real delivery — contents, procurement,
+    /// billing, history — it simply has no recurring order behind it.
+    /// </remarks>
+    public Guid? SubscriptionId { get; private set; }
+
     public Guid CustomerId { get; private set; }
 
     public DateTime ScheduledFor { get; private set; }
@@ -89,6 +99,20 @@ public class Delivery
     public DateTime? UpdatedAt { get; private set; }
 
     public IReadOnlyCollection<DeliveryLine> Lines => _lines.AsReadOnly();
+
+    /// <summary>True when this dispatch is not tied to a recurring order.</summary>
+    public bool IsOneOff => SubscriptionId is null;
+
+    /// <summary>
+    /// True once the contents are fixed, because the customer has been charged for them.
+    /// </summary>
+    /// <remarks>
+    /// Adding, removing, repricing or substituting a line after payment would mean the customer
+    /// paid for a different box from the one they receive. Recording what actually happened —
+    /// received, out of stock, shorted — stays open, because a paid delivery that came up short
+    /// is a refund to arrange, not something to hide from the record.
+    /// </remarks>
+    public bool ContentsAreLocked => HasPaid;
 
     /// <summary>Order value, accounting for substitutions and shorted lines.</summary>
     public decimal Total => _lines.Sum(l => l.LineTotal);
@@ -172,9 +196,63 @@ public class Delivery
         return delivery;
     }
 
+    /// <summary>
+    /// Creates a delivery that belongs to no subscription — a one-off for a customer already in
+    /// the system, on a day they are not otherwise scheduled.
+    /// </summary>
+    /// <remarks>
+    /// Its lines are <see cref="DeliveryLineSource.Manual"/>: nothing recurring put them there,
+    /// so there is no source row for them to point back at.
+    /// </remarks>
+    /// <param name="requestedLines">Product id and quantity per line. Must not be empty.</param>
+    public static Delivery ScheduleOneOff(
+        Customer customer,
+        DateTime scheduledFor,
+        FulfillmentMethod fulfillmentMethod,
+        IReadOnlyCollection<(Guid ProductId, int Quantity)> requestedLines,
+        IReadOnlyDictionary<Guid, Product> catalog)
+    {
+        ArgumentNullException.ThrowIfNull(customer);
+        ArgumentNullException.ThrowIfNull(requestedLines);
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        if (requestedLines.Count == 0)
+            throw new DomainException("A delivery cannot be scheduled with no line items.");
+
+        if (fulfillmentMethod == FulfillmentMethod.LocalDelivery && !customer.CanReceiveLocalDelivery)
+            throw new DomainException($"{customer.FullName} has no address on file, so a local delivery cannot be scheduled.");
+
+        var delivery = new Delivery
+        {
+            Id = Guid.NewGuid(),
+            SubscriptionId = null,
+            CustomerId = customer.Id,
+            ScheduledFor = scheduledFor.Date,
+            Status = DeliveryStatus.Scheduled,
+            FulfillmentMethod = fulfillmentMethod,
+            ProcurementStatus = ProcurementStatus.NotStarted,
+            DeliveryAddress = customer.Address ?? new Address(string.Empty, string.Empty, string.Empty, string.Empty),
+            DeliveryCoordinates = customer.Coordinates,
+            RequestedWindow = customer.PreferredWindow,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        foreach ((Guid productId, int quantity) in requestedLines)
+        {
+            if (!catalog.TryGetValue(productId, out Product? product))
+                throw new DomainException($"Product '{productId}' was requested but was not supplied in the catalog.");
+
+            delivery._lines.Add(DeliveryLine.Create(
+                delivery.Id, product.Id, product.Name, product.Price, quantity,
+                DeliveryLineSource.Manual, sourceId: null));
+        }
+
+        return delivery;
+    }
+
     public static Delivery FromDto(
         Guid id,
-        Guid subscriptionId,
+        Guid? subscriptionId,
         Guid customerId,
         DateTime scheduledFor,
         DateTime? completedAt,
@@ -230,6 +308,90 @@ public class Delivery
         return delivery;
     }
 
+    // --- Contents (editable until the customer has been charged) -----------
+
+    /// <summary>
+    /// Adds a product to this delivery by hand.
+    /// </summary>
+    /// <remarks>
+    /// The "she called and wants a bag added" case. Adding a product already on the delivery
+    /// raises that line instead of creating a second one for the same thing.
+    /// </remarks>
+    public DeliveryLine AddLine(Product product, int quantity)
+    {
+        ArgumentNullException.ThrowIfNull(product);
+
+        EnsureContentsEditable();
+
+        if (!product.IsActive)
+            throw new DomainException($"'{product.Name}' has been discontinued and cannot be added to a delivery.");
+
+        DeliveryLine? existing = _lines.FirstOrDefault(l => l.ProductId == product.Id);
+
+        if (existing is not null)
+        {
+            existing.ChangeQuantity(existing.Quantity + quantity);
+
+            RecalculateProcurementStatus();
+            Touch();
+
+            return existing;
+        }
+
+        var line = DeliveryLine.Create(
+            Id, product.Id, product.Name, product.Price, quantity,
+            DeliveryLineSource.Manual, sourceId: null);
+
+        _lines.Add(line);
+
+        RecalculateProcurementStatus();
+        Touch();
+
+        return line;
+    }
+
+    /// <summary>
+    /// Changes how much of a product is going out.
+    /// </summary>
+    /// <remarks>
+    /// On a line that came from a subscription this makes the delivery diverge from it, which is
+    /// intended — a delivery is a snapshot of what ships on one day, not a live view of the
+    /// standing order.
+    /// </remarks>
+    public void ChangeLineQuantity(Guid deliveryLineId, int quantity)
+    {
+        EnsureContentsEditable();
+
+        DeliveryLine line = FindLine(deliveryLineId);
+
+        line.ChangeQuantity(quantity);
+
+        RecalculateProcurementStatus();
+        Touch();
+    }
+
+    /// <summary>
+    /// Takes a product off this delivery entirely.
+    /// </summary>
+    /// <remarks>
+    /// Different from <see cref="ShortLine"/>: shorting says "we meant to send this and could
+    /// not", and stays on the record. Removing says it was never meant to go.
+    /// </remarks>
+    public void RemoveLine(Guid deliveryLineId)
+    {
+        EnsureContentsEditable();
+
+        DeliveryLine line = FindLine(deliveryLineId);
+
+        if (_lines.Count == 1)
+            throw new DomainException("A delivery must have at least one line. Cancel it instead of emptying it.");
+
+        _lines.Remove(line);
+
+        RecalculateProcurementStatus();
+        Touch();
+    }
+
     // --- Procurement (manual staff actions) --------------------------------
 
     /// <summary>Marks a line as on order with the supplier.</summary>
@@ -261,6 +423,10 @@ public class Delivery
     public void SubstituteLine(Guid deliveryLineId, Product substitute, string? note = null)
     {
         ArgumentNullException.ThrowIfNull(substitute);
+
+        // A substitute carries its own price, so this changes what the delivery is worth —
+        // which makes it a change to the contents, not just a record of them.
+        EnsureContentsEditable();
 
         MutateLine(deliveryLineId, line =>
             line.Substitute(substitute.Id, substitute.Name, substitute.Price, note));
@@ -510,6 +676,25 @@ public class Delivery
     }
 
     // --- Internals ---------------------------------------------------------
+
+    /// <summary>
+    /// Guards a change to what is in the box, as opposed to a record of what happened to it.
+    /// </summary>
+    private void EnsureContentsEditable()
+    {
+        EnsureOpen();
+
+        if (ContentsAreLocked)
+        {
+            throw new DomainException(
+                "This delivery has already been charged, so its contents cannot be changed. "
+                + "Refund or adjust the payment in Square first.");
+        }
+    }
+
+    private DeliveryLine FindLine(Guid deliveryLineId) =>
+        _lines.FirstOrDefault(l => l.Id == deliveryLineId)
+            ?? throw new DomainException($"Delivery line '{deliveryLineId}' was not found on this delivery.");
 
     private void MutateLine(Guid deliveryLineId, Action<DeliveryLine> mutate)
     {

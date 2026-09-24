@@ -15,6 +15,7 @@ namespace Barkfield.Administration.Application
             services.AddScoped<PetService>();
             services.AddScoped<ProductService>();
             services.AddScoped<SubscriptionService>();
+            services.AddScoped<DeliveryService>();
 
             return services;
         }

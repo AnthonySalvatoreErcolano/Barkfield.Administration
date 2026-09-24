@@ -238,50 +238,7 @@ public class CustomerService
             },
             cancellationToken);
 
-    private static Customer Rehydrate(CustomerDetailDto dto)
-    {
-        Address? address = null;
-
-        if (!string.IsNullOrWhiteSpace(dto.Street) || !string.IsNullOrWhiteSpace(dto.City))
-        {
-            address = new Address(
-                dto.Street ?? string.Empty,
-                dto.City ?? string.Empty,
-                dto.State ?? string.Empty,
-                dto.ZipCode ?? string.Empty);
-        }
-
-        TimeWindow? preferredWindow = null;
-
-        if (dto.PreferredWindowStart is not null && dto.PreferredWindowEnd is not null)
-        {
-            preferredWindow = TimeWindow.Create(dto.PreferredWindowStart.Value, dto.PreferredWindowEnd.Value);
-        }
-
-        GeoPoint? coordinates = null;
-
-        if (dto.Latitude is not null && dto.Longitude is not null)
-        {
-            coordinates = GeoPoint.Create((double)dto.Latitude.Value, (double)dto.Longitude.Value);
-        }
-
-        return Customer.FromDto(
-            dto.Id,
-            dto.FirstName,
-            dto.LastName,
-            dto.Email,
-            dto.PhoneNumber,
-            dto.Notes,
-            address,
-            dto.SquareCustomerId,
-            dto.IsActive,
-            dto.CreatedAt,
-            dto.UpdatedAt,
-            coordinates,
-            dto.AccessNotes,
-            dto.ServiceDurationMinutes,
-            preferredWindow);
-    }
+    private static Customer Rehydrate(CustomerDetailDto dto) => CustomerRehydrator.Rehydrate(dto);
 
     /// <summary>
     /// Updates the driver-facing detail for a customer's stop.

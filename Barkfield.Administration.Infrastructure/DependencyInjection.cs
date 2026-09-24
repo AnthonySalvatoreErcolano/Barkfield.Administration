@@ -1,5 +1,7 @@
 ﻿using Barkfield.Administration.Application.DataAccess.Allergies;
+using Barkfield.Administration.Application.Common;
 using Barkfield.Administration.Application.DataAccess.Customers;
+using Barkfield.Administration.Application.DataAccess.Deliveries;
 using Barkfield.Administration.Application.DataAccess.Pets;
 using Barkfield.Administration.Application.DataAccess.Products;
 using Barkfield.Administration.Application.DataAccess.Subscriptions;
@@ -13,6 +15,7 @@ using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.DataAccess.Allergies;
 using Barkfield.Administration.Infrastructure.DataAccess.Customers;
+using Barkfield.Administration.Infrastructure.DataAccess.Deliveries;
 using Barkfield.Administration.Infrastructure.DataAccess.Pets;
 using Barkfield.Administration.Infrastructure.DataAccess.Products;
 using Barkfield.Administration.Infrastructure.DataAccess.Subscriptions;
@@ -49,6 +52,10 @@ namespace Barkfield.Administration.Infrastructure
 
             services.AddSingleton<ISqlConnectionFactory>(new SqlConnectionFactory(connectionString));
             services.AddScoped<ISqlExecutor, SqlExecutor>();
+
+            // The Application layer's transaction contract, implemented over the executor above.
+            // Both must come from the same DI scope for calls to enlist, which they do.
+            services.AddScoped<ITransactionScopeFactory, TransactionScopeFactory>();
             //services.AddScoped<IBlobStorageService, BlobStorageService>();
 
             services.AddDataAccess();
@@ -79,6 +86,9 @@ namespace Barkfield.Administration.Infrastructure
         {
             services.AddScoped<ICustomerQueries, CustomerQueries>();
             services.AddScoped<ICustomerCommands, CustomerCommands>();
+
+            services.AddScoped<IDeliveryQueries, DeliveryQueries>();
+            services.AddScoped<IDeliveryCommands, DeliveryCommands>();
 
             services.AddScoped<ISubscriptionQueries, SubscriptionQueries>();
             services.AddScoped<ISubscriptionCommands, SubscriptionCommands>();
