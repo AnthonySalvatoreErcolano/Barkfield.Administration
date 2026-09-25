@@ -11,6 +11,7 @@ using Barkfield.Administration.Application.DataAccess.Identity.Tokens;
 using Barkfield.Administration.Application.DataAccess.Users;
 using Barkfield.Administration.Application.Services.Email;
 using Barkfield.Administration.Application.Services.Identity;
+using Barkfield.Administration.Application.Services;
 using Barkfield.Administration.Application.Services.Sqaure;
 using Barkfield.Administration.Infrastructure.Connections.Database;
 using Barkfield.Administration.Infrastructure.DataAccess.Allergies;
@@ -127,6 +128,8 @@ namespace Barkfield.Administration.Infrastructure
 
             services.AddScoped<ISquareService, SquareService>();
             services.AddScoped<ISquareCatalogService, SquareCatalogService>();
+            services.AddScoped<ISquareBillingService, SquareBillingService>();
+            services.AddScoped<IBillingSettings, BillingSettings>();
         }
     }
 }

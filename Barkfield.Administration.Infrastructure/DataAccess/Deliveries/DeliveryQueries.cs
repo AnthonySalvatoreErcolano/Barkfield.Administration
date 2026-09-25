@@ -78,7 +78,15 @@ public class DeliveryQueries : IDeliveryQueries
         d.Status,
         d.FulfillmentMethod,
         d.ProcurementStatus,
-        d.HasPaid,
+        d.PaymentStatus,
+        d.PaymentAttemptCount,
+        d.PaymentFailureCode,
+        d.PaymentFailureReason,
+        d.PaymentAttemptedAt,
+        d.SquareOrderId,
+        d.SquarePaymentId,
+        d.SquareReceiptUrl,
+        d.AmountCharged,
         d.AstroCompleted,
         d.ExternalOrderId,
         d.SentToRoutingAt,
@@ -159,8 +167,7 @@ public class DeliveryQueries : IDeliveryQueries
 
         if (filter.HasPaid is not null)
         {
-            where.Append(" AND d.HasPaid = @HasPaid ");
-            parameters.Add("HasPaid", filter.HasPaid.Value);
+            where.Append(filter.HasPaid.Value ? " AND d.PaymentStatus = 2 " : " AND d.PaymentStatus <> 2 ");
         }
 
         if (filter.OneOffOnly == true)
@@ -228,7 +235,10 @@ public class DeliveryQueries : IDeliveryQueries
                 d.Id, d.SubscriptionId, s.Name AS SubscriptionName,
                 d.CustomerId, c.FirstName + ' ' + c.LastName AS CustomerName,
                 d.ScheduledFor, d.CompletedAt, d.Status, d.FulfillmentMethod, d.ProcurementStatus,
-                d.HasPaid, d.AstroCompleted, d.ExternalOrderId, d.SentToRoutingAt,
+                d.PaymentStatus, d.PaymentAttemptCount, d.PaymentFailureCode, d.PaymentFailureReason,
+                d.PaymentAttemptedAt, d.SquareOrderId, d.SquarePaymentId, d.SquareReceiptUrl,
+                d.AmountCharged,
+                d.AstroCompleted, d.ExternalOrderId, d.SentToRoutingAt,
                 d.DeliveryStreet, d.DeliveryCity, d.DeliveryState, d.DeliveryZipCode,
                 d.DeliveryLatitude, d.DeliveryLongitude,
                 d.RequestedWindowStart, d.RequestedWindowEnd, d.ServiceDurationMinutesOverride,
@@ -248,7 +258,12 @@ public class DeliveryQueries : IDeliveryQueries
                 dl.StatusNote, dl.StatusUpdatedAt
             FROM dbo.DeliveryLines dl
             WHERE dl.DeliveryId = @DeliveryId
-            ORDER BY dl.Source, dl.ProductName, dl.Id;";
+            ORDER BY dl.Source, dl.ProductName, dl.Id;
+
+            SELECT dd.SquareDiscountId, dd.Name, dd.DiscountType, dd.Percentage, dd.AmountOff, dd.CreatedAt
+            FROM dbo.DeliveryDiscounts dd
+            WHERE dd.DeliveryId = @DeliveryId
+            ORDER BY dd.CreatedAt, dd.SquareDiscountId;";
 
         using var reader = await _sqlExecutor.QueryMultipleAsync(
             sql, new { DeliveryId = deliveryId }, cancellationToken);
@@ -257,6 +272,7 @@ public class DeliveryQueries : IDeliveryQueries
         if (delivery is null) return null;
 
         delivery.Lines = (await reader.ReadAsync<DeliveryLineDto>()).ToList();
+        delivery.Discounts = (await reader.ReadAsync<DeliveryDiscountDto>()).ToList();
 
         return delivery;
     }

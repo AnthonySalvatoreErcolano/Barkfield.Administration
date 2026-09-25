@@ -27,6 +27,7 @@ namespace Barkfield.Administration.Domain.Entities;
 public class Delivery
 {
     private readonly List<DeliveryLine> _lines = [];
+    private readonly List<DeliveryDiscount> _discounts = [];
 
     public Guid Id { get; private set; }
 
@@ -53,7 +54,42 @@ public class Delivery
     /// </summary>
     public ProcurementStatus ProcurementStatus { get; private set; }
 
-    public bool HasPaid { get; private set; }
+    public PaymentStatus PaymentStatus { get; private set; }
+
+    /// <summary>
+    /// Charge attempts made so far. Drives Square's idempotency key.
+    /// </summary>
+    /// <remarks>
+    /// Verified against Square: the same key with an identical payload returns the original
+    /// payment, but the same key with a <i>different</i> payload is refused outright. So the key
+    /// cannot be the delivery id alone — a deliberate retry after a decline needs a new one. This
+    /// counter is incremented and persisted before the call, so a crash mid-charge cannot reuse a
+    /// key with different contents.
+    /// </remarks>
+    public int PaymentAttemptCount { get; private set; }
+
+    /// <summary>Square's error code, verbatim. Kept because the category decides who has to act.</summary>
+    public string? PaymentFailureCode { get; private set; }
+
+    public string? PaymentFailureReason { get; private set; }
+    public DateTime? PaymentAttemptedAt { get; private set; }
+
+    /// <summary>
+    /// Square's order for this delivery, stored as soon as it is created and reused across
+    /// retries — a failed payment leaves the order open, so a new one per attempt would orphan it.
+    /// </summary>
+    public string? SquareOrderId { get; private set; }
+
+    public string? SquarePaymentId { get; private set; }
+
+    /// <summary>Square's receipt, so staff can send a customer a link without leaving the screen.</summary>
+    public string? SquareReceiptUrl { get; private set; }
+
+    /// <summary>
+    /// What Square actually took. <see cref="Total"/> is our estimate at snapshotted prices;
+    /// this is the figure on the customer's receipt.
+    /// </summary>
+    public decimal? AmountCharged { get; private set; }
 
     /// <summary>Astro Loyalty rewards applied. Phase 2 automates this; staff tick it until then.</summary>
     public bool AstroCompleted { get; private set; }
@@ -100,8 +136,42 @@ public class Delivery
 
     public IReadOnlyCollection<DeliveryLine> Lines => _lines.AsReadOnly();
 
+    /// <summary>Discounts staff chose for this delivery. Square applies them and computes the total.</summary>
+    public IReadOnlyCollection<DeliveryDiscount> Discounts => _discounts.AsReadOnly();
+
     /// <summary>True when this dispatch is not tied to a recurring order.</summary>
     public bool IsOneOff => SubscriptionId is null;
+
+    public bool HasPaid => PaymentStatus == PaymentStatus.Paid;
+
+    /// <summary>
+    /// True when this delivery can be charged right now.
+    /// </summary>
+    /// <remarks>
+    /// Procurement has to be resolved first: charging before the box is settled risks billing for
+    /// a line that turns out to be out of stock. Already-paid and closed deliveries are excluded,
+    /// and a previous decline is retryable — that is the whole point of the needs-attention list.
+    /// </remarks>
+    public bool CanCharge =>
+        PaymentStatus != PaymentStatus.Paid
+        && !IsClosed
+        && ProcurementStatus == ProcurementStatus.Ready
+        && ChargeableLines.Count > 0;
+
+    /// <summary>
+    /// The lines Square is actually billed for: shorted lines are excluded, because nothing
+    /// shipped, and a substituted line bills the substitute.
+    /// </summary>
+    public IReadOnlyCollection<DeliveryLine> ChargeableLines =>
+        _lines.Where(l => l.OrderStatus != LineOrderStatus.Shorted).ToList();
+
+    /// <summary>
+    /// A paid delivery with a line that never shipped. Refunds are handled by hand in Square, so
+    /// this exists to make sure somebody notices one is owed.
+    /// </summary>
+    public bool NeedsRefundAttention =>
+        PaymentStatus == PaymentStatus.Paid
+        && _lines.Any(l => l.OrderStatus == LineOrderStatus.Shorted);
 
     /// <summary>
     /// True once the contents are fixed, because the customer has been charged for them.
@@ -112,7 +182,7 @@ public class Delivery
     /// received, out of stock, shorted — stays open, because a paid delivery that came up short
     /// is a refund to arrange, not something to hide from the record.
     /// </remarks>
-    public bool ContentsAreLocked => HasPaid;
+    public bool ContentsAreLocked => PaymentStatus == PaymentStatus.Paid;
 
     /// <summary>Order value, accounting for substitutions and shorted lines.</summary>
     public decimal Total => _lines.Sum(l => l.LineTotal);
@@ -172,6 +242,7 @@ public class Delivery
             Status = DeliveryStatus.Scheduled,
             FulfillmentMethod = fulfillmentMethod,
             ProcurementStatus = ProcurementStatus.NotStarted,
+            PaymentStatus = PaymentStatus.NotCharged,
             DeliveryAddress = customer.Address ?? new Address(string.Empty, string.Empty, string.Empty, string.Empty),
             DeliveryCoordinates = customer.Coordinates,
             RequestedWindow = customer.PreferredWindow,
@@ -231,6 +302,7 @@ public class Delivery
             Status = DeliveryStatus.Scheduled,
             FulfillmentMethod = fulfillmentMethod,
             ProcurementStatus = ProcurementStatus.NotStarted,
+            PaymentStatus = PaymentStatus.NotCharged,
             DeliveryAddress = customer.Address ?? new Address(string.Empty, string.Empty, string.Empty, string.Empty),
             DeliveryCoordinates = customer.Coordinates,
             RequestedWindow = customer.PreferredWindow,
@@ -259,7 +331,7 @@ public class Delivery
         DeliveryStatus status,
         FulfillmentMethod fulfillmentMethod,
         ProcurementStatus procurementStatus,
-        bool hasPaid,
+        PaymentStatus paymentStatus,
         bool astroCompleted,
         string? externalOrderId,
         DateTime? sentToRoutingAt,
@@ -271,7 +343,16 @@ public class Delivery
         string? failureReason,
         DateTime createdAt,
         DateTime? updatedAt,
-        IEnumerable<DeliveryLine>? lines = null)
+        IEnumerable<DeliveryLine>? lines = null,
+        int paymentAttemptCount = 0,
+        string? paymentFailureCode = null,
+        string? paymentFailureReason = null,
+        DateTime? paymentAttemptedAt = null,
+        string? squareOrderId = null,
+        string? squarePaymentId = null,
+        string? squareReceiptUrl = null,
+        decimal? amountCharged = null,
+        IEnumerable<DeliveryDiscount>? discounts = null)
     {
         if (id == Guid.Empty)
             throw new DomainException("Invalid delivery ID.");
@@ -286,7 +367,15 @@ public class Delivery
             Status = status,
             FulfillmentMethod = fulfillmentMethod,
             ProcurementStatus = procurementStatus,
-            HasPaid = hasPaid,
+            PaymentStatus = paymentStatus,
+            PaymentAttemptCount = paymentAttemptCount,
+            PaymentFailureCode = paymentFailureCode,
+            PaymentFailureReason = paymentFailureReason,
+            PaymentAttemptedAt = paymentAttemptedAt,
+            SquareOrderId = squareOrderId,
+            SquarePaymentId = squarePaymentId,
+            SquareReceiptUrl = squareReceiptUrl,
+            AmountCharged = amountCharged,
             AstroCompleted = astroCompleted,
             ExternalOrderId = externalOrderId,
             SentToRoutingAt = sentToRoutingAt,
@@ -303,6 +392,11 @@ public class Delivery
         if (lines is not null)
         {
             delivery._lines.AddRange(lines);
+        }
+
+        if (discounts is not null)
+        {
+            delivery._discounts.AddRange(discounts);
         }
 
         return delivery;
@@ -657,10 +751,130 @@ public class Delivery
         Touch();
     }
 
-    public void MarkPaid()
+    // --- Billing -----------------------------------------------------------
+
+    /// <summary>
+    /// Replaces the discounts staff have chosen for this delivery.
+    /// </summary>
+    /// <remarks>
+    /// Wholesale, not merged — the screen shows the full set, so sending it back is what the user
+    /// means, and an empty list clears them. Refused once charged: changing the discounts after
+    /// the fact would describe a bill the customer never received.
+    /// </remarks>
+    public void SelectDiscounts(IEnumerable<(string SquareDiscountId, string Name, string? DiscountType, decimal? Percentage, decimal? AmountOff)> discounts)
     {
-        HasPaid = true;
+        ArgumentNullException.ThrowIfNull(discounts);
+
+        EnsureContentsEditable();
+
+        _discounts.Clear();
+
+        foreach (var d in discounts.DistinctBy(x => x.SquareDiscountId, StringComparer.Ordinal))
+        {
+            _discounts.Add(DeliveryDiscount.Create(
+                Id, d.SquareDiscountId, d.Name, d.DiscountType, d.Percentage, d.AmountOff));
+        }
+
         Touch();
+    }
+
+    /// <summary>
+    /// Records the Square order created for this delivery, before any payment is attempted.
+    /// </summary>
+    /// <remarks>
+    /// Persisted first on purpose: a failed payment leaves the order open, so reusing it across
+    /// retries avoids leaving an abandoned order behind every decline.
+    /// </remarks>
+    public void RecordSquareOrder(string squareOrderId)
+    {
+        if (string.IsNullOrWhiteSpace(squareOrderId))
+            throw new DomainException("A Square order identifier is required.");
+
+        SquareOrderId = squareOrderId.Trim();
+        Touch();
+    }
+
+    /// <summary>
+    /// Claims the next charge attempt and returns its number, which forms the idempotency key.
+    /// </summary>
+    /// <remarks>
+    /// Called and persisted <b>before</b> talking to Square, so a crash between the two cannot
+    /// leave a key that gets reused with different contents — Square refuses that outright, which
+    /// would strand the delivery unchargeable.
+    /// </remarks>
+    public int BeginChargeAttempt()
+    {
+        EnsureChargeable();
+
+        PaymentAttemptCount++;
+        PaymentAttemptedAt = DateTime.UtcNow;
+        Touch();
+
+        return PaymentAttemptCount;
+    }
+
+    /// <summary>
+    /// Records a successful charge. <paramref name="amountCharged"/> is what Square actually took.
+    /// </summary>
+    public void RecordPaid(string squarePaymentId, decimal amountCharged, string? receiptUrl = null)
+    {
+        if (string.IsNullOrWhiteSpace(squarePaymentId))
+            throw new DomainException("A Square payment identifier is required.");
+
+        if (amountCharged < 0)
+            throw new DomainException("A charged amount cannot be negative.");
+
+        PaymentStatus = PaymentStatus.Paid;
+        SquarePaymentId = squarePaymentId.Trim();
+        AmountCharged = amountCharged;
+        SquareReceiptUrl = string.IsNullOrWhiteSpace(receiptUrl) ? null : receiptUrl.Trim();
+        PaymentFailureCode = null;
+        PaymentFailureReason = null;
+        Touch();
+    }
+
+    /// <summary>
+    /// Records a refused charge, keeping Square's own code and detail.
+    /// </summary>
+    /// <remarks>
+    /// The code is kept verbatim because its category decides who has to act: a
+    /// <c>PAYMENT_METHOD_ERROR</c> means somebody rings the customer, anything else means the
+    /// integration is broken. Flattening both to "payment failed" would send staff chasing a
+    /// customer over a bug in our own request.
+    /// </remarks>
+    public void RecordPaymentFailed(string? code, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new DomainException("A payment failure reason is required.");
+
+        PaymentStatus = PaymentStatus.Failed;
+        PaymentFailureCode = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
+        PaymentFailureReason = reason.Trim();
+        Touch();
+    }
+
+    /// <summary>
+    /// Guards a charge, explaining precisely what is in the way.
+    /// </summary>
+    private void EnsureChargeable()
+    {
+        if (PaymentStatus == PaymentStatus.Paid)
+            throw new DomainException("This delivery has already been paid for.");
+
+        if (IsClosed)
+            throw new DomainException($"A delivery in '{Status}' cannot be charged.");
+
+        if (ProcurementStatus != ProcurementStatus.Ready)
+        {
+            string outstanding = string.Join(", ", UnresolvedLines.Select(l => $"{l.ProductName} ({l.OrderStatus})"));
+
+            throw new DomainException(
+                "This delivery cannot be charged until every line is resolved, or the customer may be "
+                + $"billed for something that never ships. Outstanding: {outstanding}.");
+        }
+
+        if (ChargeableLines.Count == 0)
+            throw new DomainException("Every line on this delivery was shorted, so there is nothing to charge for.");
     }
 
     public void MarkAstroCompleted()

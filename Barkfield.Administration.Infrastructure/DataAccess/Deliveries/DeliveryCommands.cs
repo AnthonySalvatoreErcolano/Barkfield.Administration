@@ -56,14 +56,14 @@ public class DeliveryCommands : IDeliveryCommands
 
             INSERT INTO dbo.Deliveries
                 (Id, SubscriptionId, CustomerId, ScheduledFor, CompletedAt, Status, FulfillmentMethod,
-                 ProcurementStatus, HasPaid, AstroCompleted, ExternalOrderId, SentToRoutingAt,
+                 ProcurementStatus, PaymentStatus, AstroCompleted, ExternalOrderId, SentToRoutingAt,
                  DeliveryStreet, DeliveryCity, DeliveryState, DeliveryZipCode,
                  DeliveryLatitude, DeliveryLongitude,
                  RequestedWindowStart, RequestedWindowEnd, ServiceDurationMinutesOverride,
                  Notes, FailureReason, CreatedAt)
             VALUES
                 (@Id, @SubscriptionId, @CustomerId, @ScheduledFor, @CompletedAt, @Status, @FulfillmentMethod,
-                 @ProcurementStatus, @HasPaid, @AstroCompleted, @ExternalOrderId, @SentToRoutingAt,
+                 @ProcurementStatus, @PaymentStatus, @AstroCompleted, @ExternalOrderId, @SentToRoutingAt,
                  @DeliveryStreet, @DeliveryCity, @DeliveryState, @DeliveryZipCode,
                  @DeliveryLatitude, @DeliveryLongitude,
                  @RequestedWindowStart, @RequestedWindowEnd, @ServiceDurationMinutesOverride,
@@ -92,6 +92,24 @@ public class DeliveryCommands : IDeliveryCommands
                 SubstitutedWithUnitPrice DECIMAL(10,2) '$.SubstitutedWithUnitPrice',
                 StatusNote NVARCHAR(500) '$.StatusNote',
                 StatusUpdatedAt DATETIME2(3) '$.StatusUpdatedAt') j;
+
+
+            /*  Discounts ARE delete-and-reinsert, unlike lines, and that is deliberate: a
+                discount row carries no accumulated state — no procurement status, no received
+                count — and the domain replaces the selection wholesale anyway. Preserving rows
+                by id here would buy nothing. */
+            DELETE FROM dbo.DeliveryDiscounts WHERE DeliveryId = @Id;
+
+            INSERT INTO dbo.DeliveryDiscounts
+                (DeliveryId, SquareDiscountId, Name, DiscountType, Percentage, AmountOff, CreatedAt)
+            SELECT @Id, j.SquareDiscountId, j.Name, j.DiscountType, j.Percentage, j.AmountOff, j.CreatedAt
+            FROM OPENJSON(@Discounts) WITH (
+                SquareDiscountId NVARCHAR(128) '$.SquareDiscountId',
+                Name NVARCHAR(200) '$.Name',
+                DiscountType NVARCHAR(50) '$.DiscountType',
+                Percentage DECIMAL(5,2) '$.Percentage',
+                AmountOff DECIMAL(10,2) '$.AmountOff',
+                CreatedAt DATETIME2(3) '$.CreatedAt') j;
 
             COMMIT TRANSACTION;";
 
@@ -124,7 +142,15 @@ public class DeliveryCommands : IDeliveryCommands
                    Status                         = @Status,
                    FulfillmentMethod              = @FulfillmentMethod,
                    ProcurementStatus              = @ProcurementStatus,
-                   HasPaid                        = @HasPaid,
+                   PaymentStatus                  = @PaymentStatus,
+                   PaymentAttemptCount            = @PaymentAttemptCount,
+                   PaymentFailureCode             = @PaymentFailureCode,
+                   PaymentFailureReason           = @PaymentFailureReason,
+                   PaymentAttemptedAt             = @PaymentAttemptedAt,
+                   SquareOrderId                  = @SquareOrderId,
+                   SquarePaymentId                = @SquarePaymentId,
+                   SquareReceiptUrl               = @SquareReceiptUrl,
+                   AmountCharged                  = @AmountCharged,
                    AstroCompleted                 = @AstroCompleted,
                    ExternalOrderId                = @ExternalOrderId,
                    SentToRoutingAt                = @SentToRoutingAt,
@@ -200,6 +226,24 @@ public class DeliveryCommands : IDeliveryCommands
                 StatusUpdatedAt DATETIME2(3) '$.StatusUpdatedAt') j
             WHERE NOT EXISTS (SELECT 1 FROM dbo.DeliveryLines dl WHERE dl.Id = j.Id);
 
+
+            /*  Discounts ARE delete-and-reinsert, unlike lines, and that is deliberate: a
+                discount row carries no accumulated state — no procurement status, no received
+                count — and the domain replaces the selection wholesale anyway. Preserving rows
+                by id here would buy nothing. */
+            DELETE FROM dbo.DeliveryDiscounts WHERE DeliveryId = @Id;
+
+            INSERT INTO dbo.DeliveryDiscounts
+                (DeliveryId, SquareDiscountId, Name, DiscountType, Percentage, AmountOff, CreatedAt)
+            SELECT @Id, j.SquareDiscountId, j.Name, j.DiscountType, j.Percentage, j.AmountOff, j.CreatedAt
+            FROM OPENJSON(@Discounts) WITH (
+                SquareDiscountId NVARCHAR(128) '$.SquareDiscountId',
+                Name NVARCHAR(200) '$.Name',
+                DiscountType NVARCHAR(50) '$.DiscountType',
+                Percentage DECIMAL(5,2) '$.Percentage',
+                AmountOff DECIMAL(10,2) '$.AmountOff',
+                CreatedAt DATETIME2(3) '$.CreatedAt') j;
+
             COMMIT TRANSACTION;
 
             SELECT CAST(1 AS INT);";
@@ -234,6 +278,18 @@ public class DeliveryCommands : IDeliveryCommands
             })
             .ToList();
 
+        var discounts = delivery.Discounts
+            .Select(d => new
+            {
+                d.SquareDiscountId,
+                d.Name,
+                d.DiscountType,
+                d.Percentage,
+                d.AmountOff,
+                d.CreatedAt
+            })
+            .ToList();
+
         return new
         {
             delivery.Id,
@@ -244,7 +300,15 @@ public class DeliveryCommands : IDeliveryCommands
             Status = (byte)delivery.Status,
             FulfillmentMethod = (byte)delivery.FulfillmentMethod,
             ProcurementStatus = (byte)delivery.ProcurementStatus,
-            delivery.HasPaid,
+            PaymentStatus = (byte)delivery.PaymentStatus,
+            delivery.PaymentAttemptCount,
+            delivery.PaymentFailureCode,
+            delivery.PaymentFailureReason,
+            delivery.PaymentAttemptedAt,
+            delivery.SquareOrderId,
+            delivery.SquarePaymentId,
+            delivery.SquareReceiptUrl,
+            delivery.AmountCharged,
             delivery.AstroCompleted,
             delivery.ExternalOrderId,
             delivery.SentToRoutingAt,
@@ -265,7 +329,8 @@ public class DeliveryCommands : IDeliveryCommands
             delivery.CreatedAt,
             UpdatedAt = delivery.UpdatedAt ?? DateTime.UtcNow,
             ExpectedRevision = expectedRevision,
-            Lines = JsonSerializer.Serialize(lines, JsonOptions)
+            Lines = JsonSerializer.Serialize(lines, JsonOptions),
+            Discounts = JsonSerializer.Serialize(discounts, JsonOptions)
         };
     }
 

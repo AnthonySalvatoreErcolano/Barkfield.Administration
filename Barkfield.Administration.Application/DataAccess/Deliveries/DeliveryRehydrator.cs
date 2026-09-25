@@ -65,7 +65,7 @@ public static class DeliveryRehydrator
             dto.Status,
             dto.FulfillmentMethod,
             dto.ProcurementStatus,
-            dto.HasPaid,
+            dto.PaymentStatus,
             dto.AstroCompleted,
             dto.ExternalOrderId,
             dto.SentToRoutingAt,
@@ -77,6 +77,16 @@ public static class DeliveryRehydrator
             dto.FailureReason,
             dto.CreatedAt,
             dto.UpdatedAt,
-            lines);
+            lines,
+            dto.PaymentAttemptCount,
+            dto.PaymentFailureCode,
+            dto.PaymentFailureReason,
+            dto.PaymentAttemptedAt,
+            dto.SquareOrderId,
+            dto.SquarePaymentId,
+            dto.SquareReceiptUrl,
+            dto.AmountCharged,
+            dto.Discounts.Select(d => DeliveryDiscount.FromDto(
+                dto.Id, d.SquareDiscountId, d.Name, d.DiscountType, d.Percentage, d.AmountOff, d.CreatedAt)));
     }
 }

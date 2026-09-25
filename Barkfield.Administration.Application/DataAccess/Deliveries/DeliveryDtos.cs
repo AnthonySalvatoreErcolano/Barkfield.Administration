@@ -86,7 +86,22 @@ public abstract class DeliveryHeadDto
     public FulfillmentMethod FulfillmentMethod { get; set; }
     public ProcurementStatus ProcurementStatus { get; set; }
 
-    public bool HasPaid { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public int PaymentAttemptCount { get; set; }
+
+    /// <summary>Square's error code, verbatim. PAYMENT_METHOD_ERROR means ring the customer.</summary>
+    public string? PaymentFailureCode { get; set; }
+
+    public string? PaymentFailureReason { get; set; }
+    public DateTime? PaymentAttemptedAt { get; set; }
+
+    public string? SquareOrderId { get; set; }
+    public string? SquarePaymentId { get; set; }
+    public string? SquareReceiptUrl { get; set; }
+
+    /// <summary>What Square actually took, which is the figure on the customer's receipt.</summary>
+    public decimal? AmountCharged { get; set; }
+
     public bool AstroCompleted { get; set; }
 
     public string? ExternalOrderId { get; set; }
@@ -104,6 +119,7 @@ public abstract class DeliveryHeadDto
     public string StatusName => Status.ToString();
     public string FulfillmentMethodName => FulfillmentMethod.ToString();
     public string ProcurementStatusName => ProcurementStatus.ToString();
+    public string PaymentStatusName => PaymentStatus.ToString();
 
     public bool IsOneOff => SubscriptionId is null;
 
@@ -112,8 +128,13 @@ public abstract class DeliveryHeadDto
     /// <summary>Ready to pack: every line received, substituted or knowingly shorted.</summary>
     public bool IsReadyToPack => ProcurementStatus == ProcurementStatus.Ready;
 
+    public bool HasPaid => PaymentStatus == PaymentStatus.Paid;
+
     /// <summary>Contents are fixed once the customer has been charged for them.</summary>
-    public bool ContentsAreLocked => HasPaid;
+    public bool ContentsAreLocked => PaymentStatus == PaymentStatus.Paid;
+
+    /// <summary>A charge was attempted and refused. Retryable once the card is fixed in Square.</summary>
+    public bool PaymentFailed => PaymentStatus == PaymentStatus.Failed;
 }
 
 /// <summary>
@@ -149,6 +170,9 @@ public class DeliveryDetailDto : DeliveryHeadDto
 {
     public IReadOnlyCollection<DeliveryLineDto> Lines { get; set; } = [];
 
+    /// <summary>Discounts staff chose. Only their ids are sent; Square computes the total.</summary>
+    public IReadOnlyCollection<DeliveryDiscountDto> Discounts { get; set; } = [];
+
     // Address as snapshotted onto the delivery, not as the customer stands today.
     public string DeliveryStreet { get; set; } = string.Empty;
     public string DeliveryCity { get; set; } = string.Empty;
@@ -171,6 +195,16 @@ public class DeliveryDetailDto : DeliveryHeadDto
 
     public IReadOnlyCollection<DeliveryLineDto> UnresolvedLines =>
         Lines.Where(l => !l.IsResolved).ToList();
+
+    /// <summary>
+    /// Our estimate against what Square actually took. Square prices from its live catalog and
+    /// applies tax, so a difference is information rather than an error — but it is worth seeing.
+    /// </summary>
+    public decimal? ChargeVariance => AmountCharged is null ? null : AmountCharged - Total;
+
+    /// <summary>A paid delivery with a line that never shipped. Refunds are manual in Square.</summary>
+    public bool NeedsRefundAttention =>
+        PaymentStatus == PaymentStatus.Paid && Lines.Any(l => l.OrderStatus == LineOrderStatus.Shorted);
 
     /// <summary>What is stopping this being packed, named, for the message on screen.</summary>
     public IReadOnlyCollection<string> PackingBlockers =>
@@ -229,4 +263,26 @@ public class DeliverySheetLineDto
 
     /// <summary>Shorted lines are printed struck through rather than hidden, so nothing looks lost.</summary>
     public bool IsShorted => OrderStatus == LineOrderStatus.Shorted;
+}
+
+/// <summary>
+/// A discount applied to a delivery.
+/// </summary>
+/// <remarks>
+/// The name and rate are the snapshot taken when it was applied, so a delivery from March still
+/// says what it was given after somebody edits or deletes that discount in Square. Display only —
+/// Square does the arithmetic, and only <see cref="SquareDiscountId"/> is ever sent.
+/// </remarks>
+public class DeliveryDiscountDto
+{
+    public string SquareDiscountId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? DiscountType { get; set; }
+    public decimal? Percentage { get; set; }
+    public decimal? AmountOff { get; set; }
+    public DateTime CreatedAt { get; set; }
+
+    public string Label => Percentage is not null
+        ? $"{Name} ({Percentage:0.##}%)"
+        : AmountOff is not null ? $"{Name} ({AmountOff:C} off)" : Name;
 }

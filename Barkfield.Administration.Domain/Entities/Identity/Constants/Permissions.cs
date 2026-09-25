@@ -54,8 +54,19 @@ public static class Permissions
         public const string Send = "dispatch:send";
     }
 
-    public static class Square
+    /// <summary>
+    /// Billing a delivery through Square.
+    /// </summary>
+    /// <remarks>
+    /// Replaces the old <c>square:createcart</c>, which described a workflow this application no
+    /// longer has — it bills Square directly rather than building a cart for someone to run by
+    /// hand. Migration 009 removes the dead permission.
+    /// </remarks>
+    public static class Billing
     {
-        public const string CreateCart = "square:createcart";
+        public const string View = "billing:view";
+
+        /// <summary>Charging a customer's card on file. Granted to staff, who run the day's charges.</summary>
+        public const string Charge = "billing:charge";
     }
 }
